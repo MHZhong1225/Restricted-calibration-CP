@@ -5,16 +5,17 @@ import torch.nn.functional as F
 
 
 class Backbone(nn.Module):
-    def __init__(self, input_dim=9, hidden_dim=128, feature_dim=32, num_classes=6):
+    def __init__(self, input_dim=10, hidden_dim=128, num_classes=6):
         super().__init__()
+        self.feature_dim = hidden_dim // 2
         self.feature_extractor = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, feature_dim),
+            nn.Linear(hidden_dim, self.feature_dim),
         )
-        self.classifier = nn.Linear(feature_dim, num_classes)
+        self.classifier = nn.Linear(self.feature_dim, num_classes)
 
     def forward(self, x):
         h = self.feature_extractor(x)
@@ -58,10 +59,11 @@ class StochasticMLP(nn.Module):
         return mu, sigma
 
 class SoftPrototypeAssignment(nn.Module):
-    def __init__(self, backbone: Backbone, feature_dim=32, num_prototypes=8, temperature=1.0):
+    def __init__(self, backbone: Backbone, num_prototypes=8, temperature=1.0):
         super().__init__()
         self.backbone = backbone
-        self.prototypes = nn.Parameter(torch.randn(num_prototypes, feature_dim))
+        self.feature_dim = backbone.feature_dim
+        self.prototypes = nn.Parameter(torch.randn(num_prototypes, self.feature_dim))
         self.temperature = temperature
 
     def forward(self, x):
@@ -83,7 +85,6 @@ class StochasticAssignment(nn.Module):
     def __init__(
         self,
         backbone: Backbone,
-        feature_dim=32,
         latent_dim=8,
         num_prototypes=8,
         temperature=1.0,
@@ -94,9 +95,10 @@ class StochasticAssignment(nn.Module):
     ):
         super().__init__()
         self.backbone = backbone
+        self.feature_dim = backbone.feature_dim
 
         self.posterior_net = StochasticMLP(
-            in_dim=feature_dim,
+            in_dim=self.feature_dim,
             hidden_dim=stochastic_hidden_dim,
             out_dim=latent_dim,
             num_hidden=stochastic_num_hidden,

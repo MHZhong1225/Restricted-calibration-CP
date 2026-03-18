@@ -4,13 +4,6 @@ import torch.nn.functional as F
 import torch
 from SelectiveCI_fairness.cp_obj import *
 
-def set_seed(seed=42):
-    import random
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
 def kl_diagonal_gaussians(mu_q, sig_q, mu_p, sig_p):
     var_q = sig_q ** 2
     var_p = sig_p ** 2
@@ -19,7 +12,17 @@ def kl_diagonal_gaussians(mu_q, sig_q, mu_p, sig_p):
 
 def loader_to_numpy(loader, device='cpu'):
     xs, ys, colors, ages, regions = [], [], [], [], []
-    for x, y, color, age, region in loader:
+    for batch in loader:
+        # Handle both 5-element and 6-element batches
+        if len(batch) == 5:
+            x, y, color, age, region = batch
+        elif len(batch) == 6:
+            x, y, group1, group2, age, region = batch
+            # For 6-element case, combine group1 and group2 into a single color attribute
+            color = group1  # or group2, or some combination - adjust as needed
+        else:
+            raise ValueError(f"Unexpected batch size: {len(batch)}")
+            
         xs.append(x.cpu().numpy())
         ys.append(y.cpu().numpy())
         colors.append(color.cpu().numpy())
@@ -44,7 +47,17 @@ def extract_all(backbone, loader, device="cpu"):
     feats_all, probs_all, scores_all = [], [], []
     y_all, color_all, age_all, region_all = [], [], [], []
 
-    for x, y, color, age, region in loader:
+    for batch in loader:
+        # Handle both 5-element and 6-element batches
+        if len(batch) == 5:
+            x, y, color, age, region = batch
+        elif len(batch) == 6:
+            x, y, group1, group2, age, region = batch
+            # For 6-element case, combine group1 and group2 into a single color attribute
+            color = group1  # or group2, or some combination - adjust as needed
+        else:
+            raise ValueError(f"Unexpected batch size: {len(batch)}")
+        
         x = x.to(device)
         logits, feats = backbone(x)
         probs = F.softmax(logits, dim=-1).cpu()

@@ -17,7 +17,7 @@ def calibrate_global_cp(backbone, cal_loader, alpha=0.1, device="cpu"):
 
 
 
-def evaluate_prediction_sets(pred_sets, y_true, color, age, region):
+def evaluate_prediction_sets(pred_sets, y_true, color, age, region, alpha=None):
     cover = np.array([int(y_true[i] in pred_sets[i]) for i in range(len(y_true))])
     sizes = np.array([len(s) for s in pred_sets])
 
@@ -33,7 +33,7 @@ def evaluate_prediction_sets(pred_sets, y_true, color, age, region):
     age_covs, age_sizes = group_stats(age)
     region_covs, region_sizes = group_stats(region)
 
-    return {
+    out = {
         "overall_coverage": float(cover.mean()),
         "avg_set_size": float(sizes.mean()),
         "color_coverages": color_covs,
@@ -45,6 +45,32 @@ def evaluate_prediction_sets(pred_sets, y_true, color, age, region):
         "blue_coverage": float(cover[color == 1].mean()),
         "blue_avg_set_size": float(sizes[color == 1].mean()),
     }
+    if alpha is not None:
+        target = 1.0 - float(alpha)
+        def cov_gap_from_coverages(coverages):
+            vals = [v for v in coverages.values() if not np.isnan(v)]
+            if len(vals) == 0:
+                return float("nan")
+            return float(np.mean(np.abs(np.asarray(vals, dtype=float) - target)))
+        def cov_gap_from_keys(keys):
+            uniq = np.unique(keys)
+            if len(uniq) == 0:
+                return float("nan")
+            gaps = []
+            for k in uniq:
+                idx = keys == k
+                if not idx.any():
+                    continue
+                gaps.append(abs(float(cover[idx].mean()) - target))
+            if len(gaps) == 0:
+                return float("nan")
+            return float(np.mean(np.asarray(gaps, dtype=float)))
+        joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(color, age, region)], dtype=object)
+        out["covgap"] = cov_gap_from_keys(joint_keys)
+        out["covgap_color"] = cov_gap_from_coverages(color_covs)
+        out["covgap_age"] = cov_gap_from_coverages(age_covs)
+        out["covgap_region"] = cov_gap_from_coverages(region_covs)
+    return out
 
 
 @torch.no_grad()
@@ -133,43 +159,43 @@ def calibrate_sls_cp(backbone, assign_model, cal_loader, alpha=0.1, device="cpu"
 
 
 @torch.no_grad()
-def evaluate_global_cp(backbone, cp_obj, test_loader, device="cpu"):
+def evaluate_global_cp(backbone, cp_obj, test_loader, device="cpu", alpha=None):
     data = extract_all(backbone, test_loader, device=device)
     thresholds = np.full(len(data["y"]), cp_obj.threshold, dtype=np.float32)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"])
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
 
 
 @torch.no_grad()
-def evaluate_fixed_group_cp(backbone, cp_obj, test_loader, key_fn, device="cpu"):
+def evaluate_fixed_group_cp(backbone, cp_obj, test_loader, key_fn, device="cpu", alpha=None):
     data = extract_all(backbone, test_loader, device=device)
     keys = key_fn(data)
     thresholds = cp_obj.threshold_for_keys(keys)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"])
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
 
 
 @torch.no_grad()
-def evaluate_hard_cluster_cp(backbone, cp_obj, test_loader, device="cpu"):
+def evaluate_hard_cluster_cp(backbone, cp_obj, test_loader, device="cpu", alpha=None):
     data = extract_all(backbone, test_loader, device=device)
     thresholds = cp_obj.threshold_for_batch(data["feats"])
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"])
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
 
 
 @torch.no_grad()
-def evaluate_soft_prototype_cp(backbone, assign_model, cp_obj, test_loader, device="cpu"):
+def evaluate_soft_prototype_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", alpha=None):
     data = extract_all(backbone, test_loader, device=device)
     weights = extract_softproto_weights(assign_model, test_loader, device=device)
     thresholds = cp_obj.threshold_for_batch(weights)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"])
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
 
 
 @torch.no_grad()
-def evaluate_sls_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", n_latent_samples=10):
+def evaluate_sls_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", n_latent_samples=10, alpha=None):
     data = extract_all(backbone, test_loader, device=device)
     difficulties = extract_sls_difficulties(assign_model, test_loader, device=device, n_latent_samples=n_latent_samples)
     thresholds = cp_obj.threshold_for_batch(difficulties)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"])
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
