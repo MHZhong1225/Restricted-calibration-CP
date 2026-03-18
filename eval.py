@@ -1,10 +1,13 @@
-
-
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 
-from SelectiveCI_fairness.methods import ExhaustiveSelection, PartialSelection, MarginalSelection, AFCPAdaptiveSelection, FaReG
+from SelectiveCI_fairness.methods import ExhaustiveSelection, PartialSelection, MarginalSelection, AFCPAdaptiveSelection
 from SelectiveCI_fairness.sls_flow import StochasticAssignment, SoftPrototypeAssignment
+
+from FaReG.Group_fairness.cp import Marginal_Fairness, FaReG_Fairness
+from FaReG.Group_fairness.networks import FaReG as FaReGNet
+
 
 from util.eval_tool import (
     evaluate_global_cp,
@@ -18,20 +21,10 @@ from util.eval_tool import (
     evaluate_soft_prototype_cp,
     evaluate_sls_cp,
 )
-from util.utils import loader_to_numpy, extract_all, conformal_quantile, prediction_set_from_probs_and_thresholds
+from util.utils import loader_to_numpy
 from util.train_tool import *
 
-def _ensure_nonempty(pred_sets, probs):
-    out = []
-    for i, s in enumerate(pred_sets):
-        if len(s) == 0:
-            out.append([int(np.argmax(probs[i]))])
-        else:
-            out.append(s)
-    return out
-
-
-def prediction_sets_to_metrics(test_np, C_sets):
+def prediction_sets_to_metrics(test_np, C_sets, alpha):
     y = test_np['y']
     color = test_np['color']
     age = test_np['age']
@@ -44,56 +37,53 @@ def prediction_sets_to_metrics(test_np, C_sets):
             m = key == k
             out[int(k)] = float(vals[m].mean()) if m.any() else float('nan')
         return out
+    def cov_gap_from_coverages(coverages):
+        vals = [v for v in coverages.values() if not np.isnan(v)]
+        if len(vals) == 0:
+            return float("nan")
+        target = 1.0 - float(alpha)
+        return float(np.mean(np.abs(np.asarray(vals, dtype=float) - target)))
+    def cov_gap_from_keys(keys):
+        uniq = np.unique(keys)
+        if len(uniq) == 0:
+            return float("nan")
+        target = 1.0 - float(alpha)
+        gaps = []
+        for k in uniq:
+            m = keys == k
+            if not m.any():
+                continue
+            gaps.append(abs(float(cover[m].mean()) - target))
+        if len(gaps) == 0:
+            return float("nan")
+        return float(np.mean(np.asarray(gaps, dtype=float)))
+    color_cov = grp(cover, color)
+    age_cov = grp(cover, age)
+    region_cov = grp(cover, region)
+    joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(color, age, region)], dtype=object)
+    covgap_color = cov_gap_from_coverages(color_cov)
+    covgap_age = cov_gap_from_coverages(age_cov)
+    covgap_region = cov_gap_from_coverages(region_cov)
+    covgap = cov_gap_from_keys(joint_keys)
     return {
         'overall_coverage': float(cover.mean()),
         'avg_set_size': float(size.mean()),
-        'color_coverages': grp(cover, color),
+        'color_coverages': color_cov,
         'color_set_sizes': grp(size, color),
-        'age_coverages': grp(cover, age),
+        'age_coverages': age_cov,
         'age_set_sizes': grp(size, age),
-        'region_coverages': grp(cover, region),
+        'region_coverages': region_cov,
         'region_set_sizes': grp(size, region),
         'blue_coverage': float(cover[color == 1].mean()),
         'blue_avg_set_size': float(size[color == 1].mean()),
+        'covgap': covgap,
+        'covgap_color': covgap_color,
+        'covgap_age': covgap_age,
+        'covgap_region': covgap_region,
     }
 
 
-@torch.no_grad()
-def evaluate_fareg_cp(backbone, fareg, cal_loader, test_loader, alpha, device="cpu"):
-    cal_data = extract_all(backbone, cal_loader, device=device)
-    test_data = extract_all(backbone, test_loader, device=device)
-
-    cal_feats = torch.tensor(cal_data["feats"], device=device, dtype=torch.float32)
-    test_feats = torch.tensor(test_data["feats"], device=device, dtype=torch.float32)
-    cal_prob, _, _ = fareg(cal_feats)
-    test_prob, _, _ = fareg(test_feats)
-    cal_prob = cal_prob.squeeze(-1)
-    test_prob = test_prob.squeeze(-1)
-
-    global_q = conformal_quantile(cal_data["scores"], alpha)
-
-    best_gamma = 0.0
-    best_size = float("inf")
-    target_cov = 1.0 - alpha
-    cal_prob_np = cal_prob.detach().cpu().numpy()
-    for gamma in np.linspace(0.0, 1.0, 11):
-        thr = global_q + gamma * (0.5 - cal_prob_np)
-        pred_sets = prediction_set_from_probs_and_thresholds(cal_data["probs"], thr)
-        pred_sets = _ensure_nonempty(pred_sets, cal_data["probs"])
-        cover = np.array([int(cal_data["y"][i] in pred_sets[i]) for i in range(len(pred_sets))], dtype=float).mean()
-        sizes = np.array([len(s) for s in pred_sets], dtype=float).mean()
-        if cover >= target_cov and sizes < best_size:
-            best_size = sizes
-            best_gamma = float(gamma)
-
-    test_prob_np = test_prob.detach().cpu().numpy()
-    thr_test = global_q + best_gamma * (0.5 - test_prob_np)
-    pred_sets_test = prediction_set_from_probs_and_thresholds(test_data["probs"], thr_test)
-    pred_sets_test = _ensure_nonempty(pred_sets_test, test_data["probs"])
-    return prediction_sets_to_metrics(loader_to_numpy(test_loader), pred_sets_test)
-
-
-def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, soft_cfg, sls_cfg, device):
+def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, soft_cfg, device):
     alpha = exp_cfg.alpha
 
     marginal_cp = calibrate_global_cp(backbone, cal_loader, alpha=alpha, device=device)
@@ -113,20 +103,22 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
     )
 
     results = {
-        "Marginal (paper baseline)": evaluate_global_cp(backbone, marginal_cp, test_loader, device=device),
-        "Partial(Color) (paper baseline)": evaluate_fixed_group_cp(
+        "Marginal Selection": evaluate_global_cp(backbone, marginal_cp, test_loader, device=device, alpha=alpha),
+        "Partial Selection (Color)": evaluate_fixed_group_cp(
             backbone,
             partial_color_cp,
             test_loader,
             key_fn=lambda d: list(d["color"]),
             device=device,
+            alpha=alpha,
         ),
-        "Exhaustive(Color,Age,Region) (paper baseline)": evaluate_fixed_group_cp(
+        "Exhaustive Selection (Color,Age,Region)": evaluate_fixed_group_cp(
             backbone,
             exhaustive_cp,
             test_loader,
             key_fn=lambda d: list(zip(d["color"], d["age"], d["region"])),
             device=device,
+            alpha=alpha,
         ),
     }
 
@@ -140,8 +132,9 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
     results["Marginal Selection"] = prediction_sets_to_metrics(
         test_np,
         marg.multiclass_classification(
-            test_np['x'], cal_np['x'], cal_np['y'], backbone, conditional=True, device=device
+            test_np['x'], cal_np['x'], cal_np['y'], backbone, conditional=False, device=device
         ),
+        alpha,
     )
     results["Partial Selection (Color)"] = prediction_sets_to_metrics(
         test_np,
@@ -149,6 +142,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
             test_np['x'], cal_np['x'], cal_np['y'], backbone,
             sensitive_atts_idx=[0], conditional=True, device=device
         ),
+        alpha,
     )
     results["Exhaustive Selection (Color,Age,Region)"] = prediction_sets_to_metrics(
         test_np,
@@ -156,13 +150,14 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
             test_np['x'], cal_np['x'], cal_np['y'], backbone,
             sensitive_atts_idx=[0,1,2], conditional=True, device=device
         ),
+        alpha,
     )
     if exp_cfg.run_afcp_adaptive:
         afcp_adaptive = AFCPAdaptiveSelection(alpha=alpha, ttest_delta=exp_cfg.afcp_ttest_delta)
         adaptive_sets, adaptive_k = afcp_adaptive.multiclass_classification(
             cal_np['x'], cal_np['y'], test_np['x'], backbone, att_idx=[0, 1, 2], conditional=False, device=device
         )
-        results["AFCP Adaptive Selection"] = prediction_sets_to_metrics(test_np, adaptive_sets)
+        results["AFCP Adaptive Selection"] = prediction_sets_to_metrics(test_np, adaptive_sets, alpha)
         selected_count = sum(1 for ks in adaptive_k if len(ks) > 0)
         results["AFCP Adaptive Selection"]["selected_attribute_rate"] = float(selected_count / max(len(adaptive_k), 1))
 
@@ -174,11 +169,10 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         device=device,
         seed=exp_cfg.hard_cluster_seed,
     )
-    results["Hard Cluster CP"] = evaluate_hard_cluster_cp(backbone, hard_cp, test_loader, device=device)
+    results["Hard Cluster CP"] = evaluate_hard_cluster_cp(backbone, hard_cp, test_loader, device=device, alpha=alpha)
 
     soft_assign = SoftPrototypeAssignment(
         backbone=backbone,
-        feature_dim=model_cfg.feature_dim,
         num_prototypes=model_cfg.num_prototypes,
         temperature=model_cfg.temperature,
     )
@@ -205,11 +199,165 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         soft_cp,
         test_loader,
         device=device,
+        alpha=alpha,
     )
+    results["FaReG"] = evaluate_fareg_cp(
+        backbone=backbone,
+        cal_loader=cal_loader,
+        test_loader=test_loader,
+        alpha=alpha,
+        device=device,
+    )
+
+    return results
+
+
+
+
+from util.eval_tool import (
+    evaluate_global_cp,
+    evaluate_fixed_group_cp,
+    calibrate_global_cp,
+    calibrate_fixed_group_cp,
+    calibrate_hard_cluster_cp,
+    evaluate_hard_cluster_cp,
+    calibrate_soft_prototype_cp,
+    calibrate_sls_cp,
+    evaluate_soft_prototype_cp,
+    evaluate_sls_cp,
+)
+from util.utils import loader_to_numpy
+from util.train_tool import *
+
+def evaluate_fareg_cp(backbone, cal_loader, test_loader, alpha, device="cpu"):
+    dev = device if isinstance(device, torch.device) else torch.device(device)
+
+    cal_np = loader_to_numpy(cal_loader)
+    test_np = loader_to_numpy(test_loader)
+
+    X_calib = cal_np["x"].astype(np.float32)
+    Y_calib = cal_np["y"].astype(int)
+    X_test = test_np["x"].astype(np.float32)
+
+    class _BackboneProbNet:
+        def __init__(self, backbone_model, device_):
+            self.backbone = backbone_model
+            self.device = device_
+
+        def predict_prob(self, inputs):
+            self.backbone.eval()
+            with torch.no_grad():
+                xb = inputs.to(self.device).float()
+                logits, _ = self.backbone(xb)
+                probs = torch.softmax(logits, dim=1)
+                return probs.cpu().numpy()
+
+    class _Bbox:
+        def __init__(self, net):
+            self.net = net
+
+    bbox_mc = _Bbox(_BackboneProbNet(backbone, dev))
+
+    marginal = Marginal_Fairness(alpha=alpha, random_state=2025)
+    C_sets_marginal_calib = marginal.multiclass_classification(
+        X_calib,
+        X_calib,
+        Y_calib,
+        bbox_mc=bbox_mc,
+        left_tail=False,
+        conditional=False,
+    )
+    covs_calib = np.array(
+        [1.0 if int(Y_calib[i]) in set(C_sets_marginal_calib[i]) else 0.0 for i in range(len(Y_calib))],
+        dtype=np.float32,
+    )
+
+    def _fareg_inputs(np_dict):
+        color = np_dict["color"].astype(np.float32)
+        age = (np_dict["age"].astype(np.float32) / 4.0) if np.max(np_dict["age"]) > 0 else np_dict["age"].astype(np.float32)
+        region = (np_dict["region"].astype(np.float32) / 3.0) if np.max(np_dict["region"]) > 0 else np_dict["region"].astype(np.float32)
+        return np.stack([color, age, region], axis=1).astype(np.float32)
+
+    Xf_cal = _fareg_inputs(cal_np)
+    Xf_test = _fareg_inputs(test_np)
+
+    rng = np.random.default_rng(2025)
+    perm = rng.permutation(len(Xf_cal))
+    split = max(1, len(perm) // 2)
+    tr_idx, va_idx = perm[:split], perm[split:]
+    if len(va_idx) == 0:
+        va_idx = tr_idx
+
+    X_tr = torch.tensor(Xf_cal[tr_idx], dtype=torch.float32, device=dev)
+    y_tr = torch.tensor(covs_calib[tr_idx], dtype=torch.float32, device=dev)
+    X_va = torch.tensor(Xf_cal[va_idx], dtype=torch.float32, device=dev)
+    y_va = torch.tensor(covs_calib[va_idx], dtype=torch.float32, device=dev)
+
+    fareg = FaReGNet(num_features=Xf_cal.shape[1], delta=0.3, device=dev).to(dev)
+    opt = torch.optim.Adam(fareg.parameters(), lr=1e-3)
+
+    def _val_loss():
+        fareg.eval()
+        with torch.no_grad():
+            out, _, _ = fareg(X_va)
+            denom = torch.sum(out).clamp(min=1e-6)
+            return float(torch.sum(out.squeeze() * y_va) / denom)
+
+    best_state = None
+    best_val = float("inf")
+
+    ds = TensorDataset(X_tr, y_tr)
+    loader = DataLoader(ds, batch_size=min(512, len(ds)), shuffle=True)
+    for _epoch in range(200):
+        fareg.train()
+        for xb, covb in loader:
+            opt.zero_grad()
+            out, mu, logvar = fareg(xb)
+            denom = torch.sum(out).clamp(min=1e-6)
+            miscov_loss = torch.sum(out.squeeze() * covb) / denom
+            kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+            loss = miscov_loss + 2.0 * kld
+            loss.backward()
+            opt.step()
+        v = _val_loss()
+        if v < best_val:
+            best_val = v
+            best_state = {k: t.detach().cpu().clone() for k, t in fareg.state_dict().items()}
+
+    if best_state is not None:
+        fareg.load_state_dict(best_state)
+    fareg.eval()
+
+    with torch.no_grad():
+        p_cal, _, _ = fareg(torch.tensor(Xf_cal, dtype=torch.float32, device=dev))
+        p_test, _, _ = fareg(torch.tensor(Xf_test, dtype=torch.float32, device=dev))
+    p_cal = p_cal.squeeze(-1).detach().cpu().numpy()
+    p_test = p_test.squeeze(-1).detach().cpu().numpy()
+
+    mask_list = []
+    for _ in range(20):
+        sel_cal = (rng.random(len(p_cal)) < p_cal).astype(int)
+        sel_test = (rng.random(len(p_test)) < p_test).astype(int)
+        mask_list.append((np.flatnonzero(sel_cal == 1).tolist(), np.flatnonzero(sel_test == 1).tolist()))
+
+    fareg_method = FaReG_Fairness(alpha=alpha, random_state=2025)
+    C_sets_fareg = fareg_method.multiclass_classification(
+        X_calib,
+        Y_calib,
+        X_test,
+        bbox_mc=bbox_mc,
+        mask_list=mask_list,
+        conditional=False,
+        left_tail=False,
+    )
+    return prediction_sets_to_metrics(test_np, C_sets_fareg, alpha)
+
+
+def evaluate_sls(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, sls_cfg, device):
+    alpha = exp_cfg.alpha
 
     sls_assign = StochasticAssignment(
         backbone=backbone,
-        feature_dim=model_cfg.feature_dim,
         latent_dim=model_cfg.latent_dim,
         num_prototypes=model_cfg.num_prototypes,
         temperature=model_cfg.temperature,
@@ -227,13 +375,11 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         lr=sls_cfg.lr,
         beta_kl=sls_cfg.beta_kl,
         lambda_balance=sls_cfg.lambda_balance,
+        lambda_proto_risk=sls_cfg.lambda_proto_risk,
         lambda_score=sls_cfg.lambda_score,
         lambda_tail=sls_cfg.lambda_tail,
         lambda_miss=sls_cfg.lambda_miss,
         lambda_difficulty=sls_cfg.lambda_difficulty,
-        lambda_proto_risk=sls_cfg.lambda_proto_risk,
-        tail_quantile=sls_cfg.tail_quantile,
-        n_latent_samples=sls_cfg.train_latent_samples,
         device=device,
     )
     sls_cp = calibrate_sls_cp(
@@ -246,24 +392,8 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         num_bins=sls_cfg.num_bins,
         min_bin_n=sls_cfg.min_bin_n,
     )
-    fareg = FaReG(
-        num_features=model_cfg.feature_dim,
-        delta=alpha,
-        device=device,
-        hidden_dim=64,
-        latent_dim=32,
-    ).to(device)
 
-
-    results["FaReG (difficulty-conditioned CP)"] = evaluate_fareg_cp(
-        backbone=backbone,
-        fareg=fareg,
-        cal_loader=cal_loader,
-        test_loader=test_loader,
-        alpha=alpha,
-        device=device,
-    )
-
+    results = {}
     results["SLS CP"] = evaluate_sls_cp(
         backbone,
         sls_assign,
@@ -271,6 +401,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         test_loader,
         device=device,
         n_latent_samples=sls_cfg.eval_latent_samples,
+        alpha=alpha,
     )
 
 
