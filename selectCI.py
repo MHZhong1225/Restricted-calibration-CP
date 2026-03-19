@@ -3,19 +3,29 @@ import argparse
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from tqdm.auto import tqdm
 
 import pandas as pd
 import torch
 
 from data.synthetic import build_dataloaders_1, build_dataloaders_2
-from eval import evaluate_sls
+from eval import evaluate_sgcp
 from util.helper import *
 
 from util.train_tool import train_backbone
 
-from SelectiveCI_fairness.sls_flow import Backbone
+from SelectiveCI_fairness.sgcp_flow import Backbone
+
+
+def _round_metric_columns(df: pd.DataFrame, decimals: Optional[int] = None) -> pd.DataFrame:
+    if decimals is None:
+        decimals = get_result_decimals()
+    metric_cols = [c for c in df.columns if c.startswith("metric.")]
+    for c in metric_cols:
+        if pd.api.types.is_numeric_dtype(df[c]):
+            df[c] = df[c].round(decimals)
+    return df
 
 
 # =========================
@@ -29,7 +39,7 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
             "alpha": 0.1,
             "hard_cluster_seed": 42,
             "outdir": "results",
-            "methods": "sls",
+            "methods": "sgcp",
         },
         "dataset": {
             "n_tra_cal": int,
@@ -58,21 +68,17 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
             "epochs": 200,
             "lr": 1e-3,
         },
-        "sls_train": {
+        "sgcp_train": {
             "epochs": 200,
             "lr": 1e-3,
             "beta_kl": 1e-6,
             "lambda_balance": 1e-2,
             "lambda_score": 0.5,
-            "lambda_tail": 1.0,
-            "lambda_miss": 1.0,
-            "lambda_difficulty": 0.5,
-            "lambda_proto_risk": 0.05,
-            "tail_quantile": 0.9,
             "train_latent_samples": 8,
             "eval_latent_samples": 10,
-            "num_bins": 5,
-            "min_bin_n": 30,
+            "num_score_bins": 20,
+            "score_bin_edges": "quantile",
+            "hist_smoothing": 1e-3,
         },
     }
 
@@ -86,11 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # experiment
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--methods",type=str, default='sls')
+    parser.add_argument("--methods",type=str, default='sgcp')
     parser.add_argument("--seeds", type=int, nargs="*", default=None, help="Optional multi-seed sweep, e.g. --seeds 0 1 2 3")
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--cuda", type=str, default="0")
-    parser.add_argument("--outdir", type=str, default="results_sls")
+    parser.add_argument("--outdir", type=str, default="results_sgcp")
 
     # dataset
     parser.add_argument(
@@ -130,15 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--soft-mode", type=str, default="top1", choices=["top1", "avg", "sharpened_avg"])
     parser.add_argument("--soft-gamma", type=float, default=1.0)
 
-    # sls
-    parser.add_argument("--sls-epochs", type=int, default=200)
-    parser.add_argument("--sls-lr", type=float, default=1e-3)
-    parser.add_argument("--lambda_tail", type=float, default=0.3)
-    parser.add_argument("--lambda_miss", type=float, default=0.5)
-    parser.add_argument("--lambda_difficulty", type=float, default=0.5)
+    # sgcp
+    parser.add_argument("--sgcp-epochs", type=int, default=200)
+    parser.add_argument("--sgcp-lr", type=float, default=1e-3)
+    parser.add_argument("--num-score-bins", type=int, default=20)
+    parser.add_argument("--score-bin-edges", type=str, default="quantile", choices=["quantile", "uniform"])
+    parser.add_argument("--hist-smoothing", type=float, default=1e-3)
 
     # sweep
-    parser.add_argument("--grid-json", type=str, default="para.json", )
+    parser.add_argument("--grid-json", type=str, default="grid_sgcp.json")
     parser.add_argument(
         "--sweep-name",
         type=str,
@@ -197,13 +203,13 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
         }
     )
 
-    cfg["sls_train"].update(
+    cfg["sgcp_train"].update(
         {
-            "epochs": args.sls_epochs,
-            "lr": args.sls_lr,
-            "lambda_tail": args.lambda_tail,
-            "lambda_miss": args.lambda_miss,
-            "lambda_difficulty": args.lambda_difficulty,
+            "epochs": args.sgcp_epochs,
+            "lr": args.sgcp_lr,
+            "num_score_bins": args.num_score_bins,
+            "score_bin_edges": args.score_bin_edges,
+            "hist_smoothing": args.hist_smoothing,
         }
     )
 
@@ -217,7 +223,14 @@ def save_run_results(
     outdir="results",
 ):
     Path(outdir).mkdir(parents=True, exist_ok=True)
-    float_format = f"%.{get_result_decimals()}f"
+    decimals = get_result_decimals()
+
+    def _round_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
+        metric_cols = [c for c in df.columns if c.startswith("metric.")]
+        for c in metric_cols:
+            if pd.api.types.is_numeric_dtype(df[c]):
+                df[c] = df[c].round(decimals)
+        return df
 
     def _reorder_covgap_columns(df: pd.DataFrame) -> pd.DataFrame:
         anchor = "metric.age_set_sizes"
@@ -245,7 +258,7 @@ def save_run_results(
     base_info.update(flatten_config_dict("dataset", cfg["dataset"]))
     base_info.update(flatten_config_dict("model", cfg["model"]))
     base_info.update(flatten_config_dict("backbone_train", cfg["backbone_train"]))
-    base_info.update(flatten_config_dict("sls_train", cfg["sls_train"]))
+    base_info.update(flatten_config_dict("sgcp_train", cfg["sgcp_train"]))
     base_info["dataset_name"] = dataset_name
 
     rows = []
@@ -263,6 +276,7 @@ def save_run_results(
 
     run_df = pd.DataFrame(rows)
     run_df = _reorder_covgap_columns(run_df)
+    run_df = _round_metric_columns(run_df)
 
     # run_csv_path = os.path.join(outdir, f"{run_name}.csv")
     # run_df.to_csv(run_csv_path, index=False)
@@ -272,9 +286,10 @@ def save_run_results(
         master_df = pd.read_csv(master_csv_path)
         merged = pd.concat([master_df, run_df], ignore_index=True)
         merged = _reorder_covgap_columns(merged)
-        merged.to_csv(master_csv_path, index=False, float_format=float_format)
+        merged = _round_metric_columns(merged)
+        merged.to_csv(master_csv_path, index=False)
     else:
-        run_df.to_csv(master_csv_path, index=False, float_format=float_format)
+        run_df.to_csv(master_csv_path, index=False)
 
     # print(f"\nSaved per-run JSON: {json_path}")
     # print(f"Saved per-run CSV : {run_csv_path}")
@@ -291,11 +306,16 @@ def run_name_for_cfg(cfg: Dict[str, Dict[str, Any]], dataset_name: str) -> str:
         f"_te{cfg['dataset']['test_samples']}"
         f"_bblr{cfg['backbone_train']['lr']}"
         f"_bbep{cfg['backbone_train']['epochs']}"
-        f"_slslr{cfg['sls_train']['lr']}"
-        f"_slsep{cfg['sls_train']['epochs']}"
-        f"_tail{cfg['sls_train']['lambda_tail']}"
-        f"_miss{cfg['sls_train']['lambda_miss']}"
-        f"_dif{cfg['sls_train']['lambda_difficulty']}"
+        f"_sgcplr{cfg['sgcp_train']['lr']}"
+        f"_sgcpep{cfg['sgcp_train']['epochs']}"
+        f"_kl{cfg['sgcp_train']['beta_kl']}"
+        f"_bal{cfg['sgcp_train']['lambda_balance']}"
+        f"_nll{cfg['sgcp_train']['lambda_score']}"
+        f"_lats{cfg['sgcp_train']['train_latent_samples']}"
+        f"_evalL{cfg['sgcp_train']['eval_latent_samples']}"
+        f"_bins{cfg['sgcp_train']['num_score_bins']}"
+        f"_edges{cfg['sgcp_train']['score_bin_edges']}"
+        f"_smooth{cfg['sgcp_train']['hist_smoothing']}"
         f"_proto{cfg['model']['num_prototypes']}"
         f"_latent{cfg['model']['latent_dim']}"
     )
@@ -355,7 +375,7 @@ def run_one_experiment(
 ):
     exp_cfg = SimpleNamespace(**cfg["experiment"])
     model_cfg = SimpleNamespace(**cfg["model"])
-    sls_cfg = SimpleNamespace(**cfg["sls_train"])
+    sgcp_cfg = SimpleNamespace(**cfg["sgcp_train"])
 
     set_seed(exp_cfg.seed)
     device = torch.device(f"cuda:{exp_cfg.cuda}" if torch.cuda.is_available() else "cpu")
@@ -365,7 +385,7 @@ def run_one_experiment(
         dataset=cfg["dataset"],
         model=cfg["model"],
         backbone_train=cfg["backbone_train"],
-        sls_train=cfg["sls_train"],
+        sgcp_train=cfg["sgcp_train"],
     )
     print(f"[runtime] device: {device}\n")
 
@@ -394,14 +414,14 @@ def run_one_experiment(
     )
 
 
-    results = evaluate_sls(
+    results = evaluate_sgcp(
         backbone=backbone,
         train_loader=train_loader,
         cal_loader=cal_loader,
         test_loader=test_loader,
         exp_cfg=exp_cfg,
         model_cfg=model_cfg,
-        sls_cfg=sls_cfg,
+        sgcp_cfg=sgcp_cfg,
         device=device,
         )
 
@@ -492,11 +512,15 @@ def main(args=None):
     combined_df = pd.concat(all_run_dfs, ignore_index=True)
 
     sweep_long_path = os.path.join(base_exp_cfg["outdir"], f"{parsed_args.sweep_name}_combined_long.csv")
-    combined_df.to_csv(sweep_long_path, index=False, float_format=f"%.{get_result_decimals()}f")
+    combined_df = combined_df.copy()
+    combined_df = _round_metric_columns(combined_df)
+    combined_df.to_csv(sweep_long_path, index=False)
 
     agg_df = aggregate_summary_from_df(combined_df)
     sweep_agg_path = os.path.join(base_exp_cfg["outdir"], f"{parsed_args.sweep_name}_grid_summary_mean_std.csv")
-    agg_df.to_csv(sweep_agg_path, index=False, float_format=f"%.{get_result_decimals()}f")
+    agg_df = agg_df.copy()
+    agg_df = _round_metric_columns(agg_df)
+    agg_df.to_csv(sweep_agg_path, index=False)
 
     print("\n" + "#" * 100)
     print("Sweep finished.")

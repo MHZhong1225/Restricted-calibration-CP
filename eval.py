@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from SelectiveCI_fairness.methods import ExhaustiveSelection, PartialSelection, MarginalSelection, AFCPAdaptiveSelection
-from SelectiveCI_fairness.sls_flow import StochasticAssignment, SoftPrototypeAssignment
+from SelectiveCI_fairness.sgcp_flow import StochasticAssignment, SoftPrototypeAssignment
 
 from FaReG.Group_fairness.cp import Marginal_Fairness, FaReG_Fairness
 from FaReG.Group_fairness.networks import FaReG as FaReGNet
@@ -17,9 +17,9 @@ from util.eval_tool import (
     calibrate_hard_cluster_cp,
     evaluate_hard_cluster_cp,
     calibrate_soft_prototype_cp,
-    calibrate_sls_cp,
+    calibrate_sgcp,
     evaluate_soft_prototype_cp,
-    evaluate_sls_cp,
+    evaluate_sg_cp,
 )
 from util.utils import loader_to_numpy
 from util.train_tool import *
@@ -222,9 +222,9 @@ from util.eval_tool import (
     calibrate_hard_cluster_cp,
     evaluate_hard_cluster_cp,
     calibrate_soft_prototype_cp,
-    calibrate_sls_cp,
+    calibrate_sgcp,
     evaluate_soft_prototype_cp,
-    evaluate_sls_cp,
+    evaluate_sg_cp,
 )
 from util.utils import loader_to_numpy
 from util.train_tool import *
@@ -353,10 +353,10 @@ def evaluate_fareg_cp(backbone, cal_loader, test_loader, alpha, device="cpu"):
     return prediction_sets_to_metrics(test_np, C_sets_fareg, alpha)
 
 
-def evaluate_sls(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, sls_cfg, device):
+def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, sgcp_cfg, device):
     alpha = exp_cfg.alpha
 
-    sls_assign = StochasticAssignment(
+    sg_assign = StochasticAssignment(
         backbone=backbone,
         latent_dim=model_cfg.latent_dim,
         num_prototypes=model_cfg.num_prototypes,
@@ -366,41 +366,38 @@ def evaluate_sls(backbone, train_loader, cal_loader, test_loader, exp_cfg, model
         prior_in_dim=model_cfg.num_classes,
         min_sig=model_cfg.min_sig,
     )
-    sls_assign = train_stochastic_assignment(
-        sls_assign,
+    sg_assign = train_stochastic_assignment(
+        sg_assign,
         train_loader,
         backbone=backbone,
-        alpha=alpha,
-        epochs=sls_cfg.epochs,
-        lr=sls_cfg.lr,
-        beta_kl=sls_cfg.beta_kl,
-        lambda_balance=sls_cfg.lambda_balance,
-        lambda_proto_risk=sls_cfg.lambda_proto_risk,
-        lambda_score=sls_cfg.lambda_score,
-        lambda_tail=sls_cfg.lambda_tail,
-        lambda_miss=sls_cfg.lambda_miss,
-        lambda_difficulty=sls_cfg.lambda_difficulty,
+        epochs=sgcp_cfg.epochs,
+        lr=sgcp_cfg.lr,
+        beta_kl=sgcp_cfg.beta_kl,
+        lambda_balance=sgcp_cfg.lambda_balance,
+        lambda_score=sgcp_cfg.lambda_score,
+        n_latent_samples=sgcp_cfg.train_latent_samples,
+        num_score_bins=getattr(sgcp_cfg, "num_score_bins", 20),
+        score_bin_edges=getattr(sgcp_cfg, "score_bin_edges", "quantile"),
+        hist_smoothing=getattr(sgcp_cfg, "hist_smoothing", 1e-3),
         device=device,
     )
-    sls_cp = calibrate_sls_cp(
+    sg_cp = calibrate_sgcp(
         backbone,
-        sls_assign,
+        sg_assign,
         cal_loader,
         alpha=alpha,
         device=device,
-        n_latent_samples=sls_cfg.eval_latent_samples,
-        num_bins=sls_cfg.num_bins,
-        min_bin_n=sls_cfg.min_bin_n,
+        n_latent_samples=sgcp_cfg.eval_latent_samples,
     )
 
     results = {}
-    results["SLS CP"] = evaluate_sls_cp(
+    results["SGCP"] = evaluate_sg_cp(
         backbone,
-        sls_assign,
-        sls_cp,
+        sg_assign,
+        sg_cp,
         test_loader,
         device=device,
-        n_latent_samples=sls_cfg.eval_latent_samples,
+        n_latent_samples=sgcp_cfg.eval_latent_samples,
         alpha=alpha,
     )
 

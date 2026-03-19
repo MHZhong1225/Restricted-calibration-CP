@@ -2,8 +2,8 @@ import numpy as np
 import torch
 from .utils import conformal_quantile, extract_all
 from SelectiveCI_fairness.cp_obj import *
-from util.utils import extract_all, conformal_quantile, prediction_set_from_probs_and_thresholds
-from util.utils import simple_kmeans, extract_sls_difficulties, extract_softproto_weights, weighted_quantile
+from util.utils import prediction_set_from_probs_and_thresholds
+from util.utils import simple_kmeans, extract_sls_weights, extract_softproto_weights, weighted_quantile
 
 # =========================
 # Calibration
@@ -127,34 +127,46 @@ def calibrate_soft_prototype_cp(backbone, assign_model, cal_loader, alpha=0.1, d
 
 
 @torch.no_grad()
-def calibrate_sls_cp(backbone, assign_model, cal_loader, alpha=0.1, device="cpu", n_latent_samples=10, num_bins=5, min_bin_n=30):
+def calibrate_sgcp(backbone, assign_model, cal_loader, alpha=0.1, device="cpu", n_latent_samples=10):
     data = extract_all(backbone, cal_loader, device=device)
-    scores = data["scores"]
-    difficulties = extract_sls_difficulties(assign_model, cal_loader, device=device, n_latent_samples=n_latent_samples)
-    difficulties = np.clip(difficulties, 0.0, 1.0)
+    scores = np.asarray(data["scores"], dtype=np.float32)
+    weights = extract_sls_weights(assign_model, cal_loader, device=device, n_latent_samples=n_latent_samples).astype(np.float32)
 
-    global_q = conformal_quantile(scores, alpha)
+    row_sum = np.sum(weights, axis=1, keepdims=True)
+    row_sum = np.clip(row_sum, 1e-12, None)
+    weights = weights / row_sum
 
-    raw_edges = np.quantile(difficulties, np.linspace(0.0, 1.0, num_bins + 1))
-    raw_edges[0] = 0.0
-    raw_edges[-1] = 1.0
-    bin_edges = raw_edges.copy()
-    for i in range(1, len(bin_edges)):
-        bin_edges[i] = max(bin_edges[i], bin_edges[i - 1])
+    def build_weighted_ecdf(s, w):
+        s = np.asarray(s, dtype=np.float32)
+        w = np.asarray(w, dtype=np.float32)
+        order = np.argsort(s)
+        s_sorted = s[order]
+        w_sorted = w[order]
+        denom = float(np.sum(w_sorted))
+        if denom <= 0.0:
+            return s_sorted, np.zeros_like(s_sorted, dtype=np.float32)
+        cdf = (np.cumsum(w_sorted) / denom).astype(np.float32)
+        return s_sorted, cdf
 
-    bin_ids = np.digitize(difficulties, bin_edges[1:-1], right=False)
-    bin_thresholds = np.full(num_bins, global_q, dtype=np.float32)
+    global_scores_sorted, global_cdf_sorted = build_weighted_ecdf(scores, np.ones_like(scores, dtype=np.float32))
 
-    for b in range(num_bins):
-        idx = np.where(bin_ids == b)[0]
-        if len(idx) >= min_bin_n:
-            bin_thresholds[b] = conformal_quantile(scores[idx], alpha)
+    k = weights.shape[1]
+    group_scores_sorted = []
+    group_cdf_sorted = []
+    for g in range(k):
+        w_g = weights[:, g]
+        if float(np.sum(w_g)) <= 1e-8:
+            group_scores_sorted.append(global_scores_sorted)
+            group_cdf_sorted.append(global_cdf_sorted)
+        else:
+            s_sorted, cdf_sorted = build_weighted_ecdf(scores, w_g)
+            group_scores_sorted.append(s_sorted)
+            group_cdf_sorted.append(cdf_sorted)
 
-    return BinnedSLSCP(
-        bin_edges=bin_edges.astype(np.float32),
-        bin_thresholds=bin_thresholds,
-        fallback_threshold=global_q,
-    )
+    sgcp = SGCP(group_scores_sorted=group_scores_sorted, group_cdf_sorted=group_cdf_sorted, q_v=0.0)
+    v_cal = sgcp.local_cdf(scores, weights)
+    sgcp.q_v = conformal_quantile(v_cal, alpha)
+    return sgcp
 
 
 
@@ -193,9 +205,20 @@ def evaluate_soft_prototype_cp(backbone, assign_model, cp_obj, test_loader, devi
 
 
 @torch.no_grad()
-def evaluate_sls_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", n_latent_samples=10, alpha=None):
+def evaluate_sg_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", n_latent_samples=10, alpha=None):
     data = extract_all(backbone, test_loader, device=device)
-    difficulties = extract_sls_difficulties(assign_model, test_loader, device=device, n_latent_samples=n_latent_samples)
-    thresholds = cp_obj.threshold_for_batch(difficulties)
-    pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
+    probs = np.asarray(data["probs"], dtype=np.float32)
+    weights = extract_sls_weights(assign_model, test_loader, device=device, n_latent_samples=n_latent_samples).astype(np.float32)
+    row_sum = np.sum(weights, axis=1, keepdims=True)
+    row_sum = np.clip(row_sum, 1e-12, None)
+    weights = weights / row_sum
+
+    scores_all = 1.0 - probs
+    v_all = cp_obj.local_cdf(scores_all, weights)
+    pred_sets = []
+    n, c = probs.shape
+    qv = float(cp_obj.q_v)
+    for i in range(n):
+        labels = [y for y in range(c) if float(v_all[i, y]) <= qv]
+        pred_sets.append(labels)
     return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
