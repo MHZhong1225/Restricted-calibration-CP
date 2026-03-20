@@ -17,9 +17,10 @@ def loader_to_numpy(loader, device='cpu'):
         if len(batch) == 5:
             x, y, color, age, region = batch
         elif len(batch) == 6:
-            x, y, group1, group2, age, region = batch
-            # For 6-element case, combine group1 and group2 into a single color attribute
-            color = group1  # or group2, or some combination - adjust as needed
+            x, y, group1, group2, _attr1, attr2 = batch
+            color = group1
+            age = group2
+            region = attr2
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}")
             
@@ -52,9 +53,10 @@ def extract_all(backbone, loader, device="cpu"):
         if len(batch) == 5:
             x, y, color, age, region = batch
         elif len(batch) == 6:
-            x, y, group1, group2, age, region = batch
-            # For 6-element case, combine group1 and group2 into a single color attribute
-            color = group1  # or group2, or some combination - adjust as needed
+            x, y, group1, group2, _attr1, attr2 = batch
+            color = group1
+            age = group2
+            region = attr2
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}")
         

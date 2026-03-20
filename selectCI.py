@@ -10,6 +10,7 @@ import pandas as pd
 import torch
 
 from data.synthetic import build_dataloaders_1, build_dataloaders_2
+from data.mimic import build_dataloaders_mimic
 from eval import evaluate_sgcp
 from util.helper import *
 
@@ -40,6 +41,7 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
             "hard_cluster_seed": 42,
             "outdir": "results",
             "methods": "sgcp",
+            "make_intro_figure": False,
         },
         "dataset": {
             "n_tra_cal": int,
@@ -52,6 +54,16 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
             "n_nonsensitive": 6,
             "batch_size": 128,
             "dataset_mode": "single_sensitive",
+            "mimic_preprocessed_path": "",
+            "mimic_n_use": 0,
+            "mimic_train_frac": 0.6,
+            "mimic_cal_frac": 0.2,
+            "mimic_label_col": "label",
+            "mimic_sensitive_col": "minority",
+            "mimic_age_col": "age",
+            "mimic_region_col": "",
+            "mimic_feature_cols": "",
+            "mimic_id_cols": "SUBJECT_ID,HADM_ID",
         },
         "model": {
             "hidden_dim": 128,
@@ -96,14 +108,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seeds", type=int, nargs="*", default=None, help="Optional multi-seed sweep, e.g. --seeds 0 1 2 3")
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--cuda", type=str, default="0")
-    parser.add_argument("--outdir", type=str, default="results_sgcp")
+    parser.add_argument("--outdir", type=str, default="results_sgcp_mimic")
 
     # dataset
     parser.add_argument(
         "--dataset-mode",
         type=str,
         default="single_sensitive",
-        choices=["single_sensitive", "two_sensitive"],
+        choices=["single_sensitive", "two_sensitive", "mimic"],
     )
     parser.add_argument("--n_tra_cal", type=int, default=200)
     parser.add_argument("--test-samples", type=int, default=500)
@@ -114,6 +126,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delta0", type=float, default=0.2)
     parser.add_argument("--n-nonsensitive", type=int, default=6)
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--mimic-preprocessed-path", type=str, default="")
+    parser.add_argument("--mimic-n-use", type=int, default=1000)
+    parser.add_argument("--mimic-train-frac", type=float, default=0.6)
+    parser.add_argument("--mimic-cal-frac", type=float, default=0.2)
+    parser.add_argument("--mimic-label-col", type=str, default="label")
+    parser.add_argument("--mimic-sensitive-col", type=str, default="minority")
+    parser.add_argument("--mimic-age-col", type=str, default="age")
+    parser.add_argument("--mimic-region-col", type=str, default="")
+    parser.add_argument("--mimic-feature-cols", type=str, default="")
+    parser.add_argument("--mimic-id-cols", type=str, default="SUBJECT_ID,HADM_ID")
+    parser.add_argument("--make-intro-figure", action="store_true")
 
     # model
     parser.add_argument("--hidden-dim", type=int, default=128)
@@ -166,6 +189,7 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
             "methods": args.methods,
             "seed": args.seed,
             "cuda": args.cuda,
+            "make_intro_figure": bool(getattr(args, "make_intro_figure", False)),
         }
     )
     cfg["dataset"].update(
@@ -180,6 +204,16 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
             "n_nonsensitive": args.n_nonsensitive,
             "batch_size": args.batch_size,
             "dataset_mode": args.dataset_mode,
+            "mimic_preprocessed_path": args.mimic_preprocessed_path,
+            "mimic_n_use": args.mimic_n_use,
+            "mimic_train_frac": args.mimic_train_frac,
+            "mimic_cal_frac": args.mimic_cal_frac,
+            "mimic_label_col": args.mimic_label_col,
+            "mimic_sensitive_col": args.mimic_sensitive_col,
+            "mimic_age_col": args.mimic_age_col,
+            "mimic_region_col": args.mimic_region_col,
+            "mimic_feature_cols": args.mimic_feature_cols,
+            "mimic_id_cols": args.mimic_id_cols,
         }
     )
 
@@ -195,6 +229,8 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
             "min_sig": args.min_sig,
         }
     )
+    if args.dataset_mode == "mimic" and args.num_classes == 6:
+        cfg["model"]["num_classes"] = 2
 
     cfg["backbone_train"].update(
         {
@@ -223,14 +259,6 @@ def save_run_results(
     outdir="results",
 ):
     Path(outdir).mkdir(parents=True, exist_ok=True)
-    decimals = get_result_decimals()
-
-    def _round_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
-        metric_cols = [c for c in df.columns if c.startswith("metric.")]
-        for c in metric_cols:
-            if pd.api.types.is_numeric_dtype(df[c]):
-                df[c] = df[c].round(decimals)
-        return df
 
     def _reorder_covgap_columns(df: pd.DataFrame) -> pd.DataFrame:
         anchor = "metric.age_set_sizes"
@@ -331,6 +359,24 @@ def run_csv_path_for_cfg(cfg: Dict[str, Dict[str, Any]], dataset_name: str) -> s
 
 def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any], seed: int):
     
+    if data_cfg["dataset_mode"] == "mimic":
+        mimic_cfg = SimpleNamespace(
+            mimic_preprocessed_path=data_cfg["mimic_preprocessed_path"],
+            n_use=data_cfg.get("mimic_n_use", 0),
+            train_frac=data_cfg.get("mimic_train_frac", 0.6),
+            cal_frac=data_cfg.get("mimic_cal_frac", 0.2),
+            label_col=data_cfg.get("mimic_label_col", "label"),
+            sensitive_col=data_cfg.get("mimic_sensitive_col", "minority"),
+            age_col=data_cfg.get("mimic_age_col", "age"),
+            region_col=(data_cfg.get("mimic_region_col") or None),
+            feature_cols=(data_cfg.get("mimic_feature_cols") or None),
+            id_cols=(data_cfg.get("mimic_id_cols") or None),
+            batch_size=data_cfg["batch_size"],
+            seed=seed,
+        )
+        train_loader, cal_loader, test_loader, meta = build_dataloaders_mimic(mimic_cfg)
+        return train_loader, cal_loader, test_loader, "mimic", meta
+
     if data_cfg["dataset_mode"] == "two_sensitive":
         syn_cfg = SimpleNamespace(
             K=model_cfg["num_classes"],
@@ -397,7 +443,7 @@ def run_one_experiment(
     )
 
     print(f"[runtime] dataset_name: {dataset_name}")
-    print(f"[runtime] synthetic_cfg: {vars(syn_cfg)}\n")
+    print(f"[runtime] dataset_cfg: {vars(syn_cfg)}\n")
 
     backbone = Backbone(
         input_dim=next(iter(train_loader))[0].shape[1],
@@ -414,7 +460,7 @@ def run_one_experiment(
     )
 
 
-    results = evaluate_sgcp(
+    metrics, sg_assign, _sg_cp = evaluate_sgcp(
         backbone=backbone,
         train_loader=train_loader,
         cal_loader=cal_loader,
@@ -425,12 +471,26 @@ def run_one_experiment(
         device=device,
         )
 
-    for title, metrics in results.items():
+    if cfg["dataset"]["dataset_mode"] == "mimic" and cfg["experiment"].get("methods") == "sgcp" and cfg["experiment"].get("make_intro_figure", False):
+        from figures.intro_borrowing_mimic.make_intro_borrowing_mimic_figure import make_intro_borrowing_mimic_figure
+
+        out_dir = os.path.join(exp_cfg.outdir, "figures_intro")
+        make_intro_borrowing_mimic_figure(
+            backbone=backbone,
+            assign_model=sg_assign,
+            cal_loader=cal_loader,
+            test_loader=test_loader,
+            out_dir=out_dir,
+            device=str(device),
+            n_latent_samples=int(getattr(sgcp_cfg, "eval_latent_samples", 10)),
+        )
+
+    for title, metrics0 in metrics.items():
         print(f"\n=== {title} ===")
-        print(metrics)
+        print(metrics0)
 
     run_df, master_csv_path = save_run_results(
-        results=results,
+        results=metrics,
         cfg=cfg,
         dataset_name=dataset_name,
         outdir=exp_cfg.outdir,
@@ -494,6 +554,10 @@ def main(args=None):
         cfg = clone_cfg(base_cfg)
         cfg["experiment"]["seed"] = seed
         apply_overrides(cfg=cfg, override_dict=overrides)
+        if parsed_args.dataset_mode == "mimic":
+            cfg["dataset"]["dataset_mode"] = "mimic"
+            if cfg["model"]["num_classes"] == 6:
+                cfg["model"]["num_classes"] = 2
 
         # dataset_name = dataset_name_for_cfg(cfg)
 

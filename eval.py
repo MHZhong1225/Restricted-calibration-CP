@@ -122,45 +122,6 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         ),
     }
 
-    cal_np = loader_to_numpy(cal_loader)
-    test_np = loader_to_numpy(test_loader)
-
-    marg = MarginalSelection(alpha=alpha)
-    partial = PartialSelection(alpha=alpha)
-    exhaustive = ExhaustiveSelection(alpha=alpha)
-
-    results["Marginal Selection"] = prediction_sets_to_metrics(
-        test_np,
-        marg.multiclass_classification(
-            test_np['x'], cal_np['x'], cal_np['y'], backbone, conditional=False, device=device
-        ),
-        alpha,
-    )
-    results["Partial Selection (Color)"] = prediction_sets_to_metrics(
-        test_np,
-        partial.multiclass_classification(
-            test_np['x'], cal_np['x'], cal_np['y'], backbone,
-            sensitive_atts_idx=[0], conditional=True, device=device
-        ),
-        alpha,
-    )
-    results["Exhaustive Selection (Color,Age,Region)"] = prediction_sets_to_metrics(
-        test_np,
-        exhaustive.multiclass_classification(
-            test_np['x'], cal_np['x'], cal_np['y'], backbone,
-            sensitive_atts_idx=[0,1,2], conditional=True, device=device
-        ),
-        alpha,
-    )
-    if exp_cfg.run_afcp_adaptive:
-        afcp_adaptive = AFCPAdaptiveSelection(alpha=alpha, ttest_delta=exp_cfg.afcp_ttest_delta)
-        adaptive_sets, adaptive_k = afcp_adaptive.multiclass_classification(
-            cal_np['x'], cal_np['y'], test_np['x'], backbone, att_idx=[0, 1, 2], conditional=False, device=device
-        )
-        results["AFCP Adaptive Selection"] = prediction_sets_to_metrics(test_np, adaptive_sets, alpha)
-        selected_count = sum(1 for ks in adaptive_k if len(ks) > 0)
-        results["AFCP Adaptive Selection"]["selected_attribute_rate"] = float(selected_count / max(len(adaptive_k), 1))
-
     hard_cp = calibrate_hard_cluster_cp(
         backbone,
         cal_loader,
@@ -402,4 +363,4 @@ def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, mode
     )
 
 
-    return results
+    return results, sg_assign, sg_cp 
