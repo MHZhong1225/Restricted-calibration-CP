@@ -20,7 +20,7 @@ class FixedGroupCP:
 
 
 @dataclass
-class HardClusterCP:
+class ClusteredCP:
     cluster_thresholds: np.ndarray
     cluster_centers: np.ndarray
 
@@ -31,7 +31,7 @@ class HardClusterCP:
 
 
 @dataclass
-class SoftPrototypeCP:
+class PrototypeCP:
     prototype_thresholds: np.ndarray
     mode: str = "top1"
     gamma: float = 2.0
@@ -39,13 +39,8 @@ class SoftPrototypeCP:
     def threshold_for_batch(self, weights):
         if self.mode == "avg":
             return np.sum(weights * self.prototype_thresholds[None, :], axis=1)
-        if self.mode == "sharpened_avg":
-            sharp_w = np.power(np.clip(weights, 1e-12, 1.0), self.gamma)
-            sharp_w = sharp_w / sharp_w.sum(axis=1, keepdims=True)
-            return np.sum(sharp_w * self.prototype_thresholds[None, :], axis=1)
         top_idx = np.argmax(weights, axis=1)
         return self.prototype_thresholds[top_idx]
-
 
 
 

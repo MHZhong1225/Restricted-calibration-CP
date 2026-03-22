@@ -2,8 +2,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from SelectiveCI_fairness.methods import ExhaustiveSelection, PartialSelection, MarginalSelection, AFCPAdaptiveSelection
-from SelectiveCI_fairness.sgcp_flow import StochasticAssignment, SoftPrototypeAssignment
+from SelectiveCI_fairness.methods import AFCPAdaptiveSelection
+from SelectiveCI_fairness.sgcp_flow import StochasticAssignment, PrototypeAssignment
 
 from FaReG.Group_fairness.cp import Marginal_Fairness, FaReG_Fairness
 from FaReG.Group_fairness.networks import FaReG as FaReGNet
@@ -16,9 +16,9 @@ from util.eval_tool import (
     calibrate_fixed_group_cp,
     calibrate_hard_cluster_cp,
     evaluate_hard_cluster_cp,
-    calibrate_soft_prototype_cp,
+    calibrate_prototype_cp,
     calibrate_sgcp,
-    evaluate_soft_prototype_cp,
+    evaluate_prototype_cp,
     evaluate_sg_cp,
 )
 from util.utils import loader_to_numpy
@@ -83,159 +83,6 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
     }
 
 
-def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, soft_cfg, device):
-    alpha = exp_cfg.alpha
-
-    marginal_cp = calibrate_global_cp(backbone, cal_loader, alpha=alpha, device=device)
-    partial_color_cp = calibrate_fixed_group_cp(
-        backbone,
-        cal_loader,
-        key_fn=lambda d: list(d["color"]),
-        alpha=alpha,
-        device=device,
-    )
-    exhaustive_cp = calibrate_fixed_group_cp(
-        backbone,
-        cal_loader,
-        key_fn=lambda d: list(zip(d["color"], d["age"], d["region"])),
-        alpha=alpha,
-        device=device,
-    )
-
-    results = {
-        "Marginal Selection": evaluate_global_cp(backbone, marginal_cp, test_loader, device=device, alpha=alpha),
-        "Partial Selection (Color)": evaluate_fixed_group_cp(
-            backbone,
-            partial_color_cp,
-            test_loader,
-            key_fn=lambda d: list(d["color"]),
-            device=device,
-            alpha=alpha,
-        ),
-        "Exhaustive Selection (Color,Age,Region)": evaluate_fixed_group_cp(
-            backbone,
-            exhaustive_cp,
-            test_loader,
-            key_fn=lambda d: list(zip(d["color"], d["age"], d["region"])),
-            device=device,
-            alpha=alpha,
-        ),
-    }
-
-    if getattr(exp_cfg, "run_afcp_adaptive", False):
-        cal_np = loader_to_numpy(cal_loader)
-        test_np = loader_to_numpy(test_loader)
-        X_calib = cal_np["x"].astype(np.float32)
-        Y_calib = cal_np["y"].astype(int)
-        X_test = test_np["x"].astype(np.float32)
-
-        batch0 = next(iter(cal_loader))
-        d = int(X_calib.shape[1])
-        n_check = min(256, len(X_calib))
-
-        group_X_calib = None
-        group_X_test = None
-
-        if len(batch0) == 5:
-            att_idx_emb = [d - 1, d - 2, d - 3]
-            embedded_ok = False
-            if n_check > 0:
-                embedded_ok = float(np.mean(X_calib[:n_check, att_idx_emb[0]].astype(int) == cal_np["color"][:n_check].astype(int))) >= 0.95
-            if embedded_ok:
-                att_idx = att_idx_emb
-            else:
-                group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"]]).astype(int)
-                group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"]]).astype(int)
-                att_idx = [0, 1, 2]
-        elif len(batch0) == 6:
-            att_idx = [d - 1, d - 2, d - 4]
-        else:
-            raise ValueError(f"AFCPAdaptiveSelection expects 5- or 6-field batches, got {len(batch0)}")
-
-        afcp = AFCPAdaptiveSelection(alpha=alpha, ttest_delta=getattr(exp_cfg, "afcp_ttest_delta", None), random_state=getattr(exp_cfg, "seed", 2024))
-        C_sets_afcp, _k_hat = afcp.multiclass_classification(
-            X_calib=X_calib,
-            Y_calib=Y_calib,
-            X_test=X_test,
-            backbone=backbone,
-            att_idx=att_idx,
-            return_khat=True,
-            conditional=False,
-            left_tail=False,
-            device=device,
-            group_X_calib=group_X_calib,
-            group_X_test=group_X_test,
-            show_progress=True,
-        )
-        results["AFCP Adaptive Selection"] = prediction_sets_to_metrics(test_np, C_sets_afcp, alpha)
-
-    hard_cp = calibrate_hard_cluster_cp(
-        backbone,
-        cal_loader,
-        alpha=alpha,
-        K=model_cfg.num_prototypes,
-        device=device,
-        seed=exp_cfg.hard_cluster_seed,
-    )
-    results["Hard Cluster CP"] = evaluate_hard_cluster_cp(backbone, hard_cp, test_loader, device=device, alpha=alpha)
-
-    soft_assign = SoftPrototypeAssignment(
-        backbone=backbone,
-        num_prototypes=model_cfg.num_prototypes,
-        temperature=model_cfg.temperature,
-    )
-    soft_assign = train_soft_prototype_assignment(
-        soft_assign,
-        train_loader,
-        epochs=soft_cfg.epochs,
-        lr=soft_cfg.lr,
-        lambda_balance=soft_cfg.lambda_balance,
-        device=device,
-    )
-    soft_cp = calibrate_soft_prototype_cp(
-        backbone,
-        soft_assign,
-        cal_loader,
-        alpha=alpha,
-        device=device,
-        mode=soft_cfg.mode,
-        gamma=soft_cfg.gamma,
-    )
-    results["Soft Prototype CP"] = evaluate_soft_prototype_cp(
-        backbone,
-        soft_assign,
-        soft_cp,
-        test_loader,
-        device=device,
-        alpha=alpha,
-    )
-    results["FaReG"] = evaluate_fareg_cp(
-        backbone=backbone,
-        cal_loader=cal_loader,
-        test_loader=test_loader,
-        alpha=alpha,
-        device=device,
-    )
-
-    return results
-
-
-
-
-from util.eval_tool import (
-    evaluate_global_cp,
-    evaluate_fixed_group_cp,
-    calibrate_global_cp,
-    calibrate_fixed_group_cp,
-    calibrate_hard_cluster_cp,
-    evaluate_hard_cluster_cp,
-    calibrate_soft_prototype_cp,
-    calibrate_sgcp,
-    evaluate_soft_prototype_cp,
-    evaluate_sg_cp,
-)
-from util.utils import loader_to_numpy
-from util.train_tool import *
 
 def evaluate_fareg_cp(backbone, cal_loader, test_loader, alpha, device="cpu"):
     dev = device if isinstance(device, torch.device) else torch.device(device)
@@ -359,6 +206,146 @@ def evaluate_fareg_cp(backbone, cal_loader, test_loader, alpha, device="cpu"):
         left_tail=False,
     )
     return prediction_sets_to_metrics(test_np, C_sets_fareg, alpha)
+
+
+def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, soft_cfg, device):
+    alpha = exp_cfg.alpha
+
+    marginal_cp = calibrate_global_cp(backbone, cal_loader, alpha=alpha, device=device)
+    partial_color_cp = calibrate_fixed_group_cp(
+        backbone,
+        cal_loader,
+        key_fn=lambda d: list(d["color"]),
+        alpha=alpha,
+        device=device,
+    )
+    exhaustive_cp = calibrate_fixed_group_cp(
+        backbone,
+        cal_loader,
+        key_fn=lambda d: list(zip(d["color"], d["age"], d["region"])),
+        alpha=alpha,
+        device=device,
+    )
+
+    results = {
+        "Marginal CP": evaluate_global_cp(backbone, marginal_cp, test_loader, device=device, alpha=alpha),
+        "Partial CP": evaluate_fixed_group_cp(
+            backbone,
+            partial_color_cp,
+            test_loader,
+            key_fn=lambda d: list(d["color"]),
+            device=device,
+            alpha=alpha,
+        ),
+        "Exhaustive Cp": evaluate_fixed_group_cp(
+            backbone,
+            exhaustive_cp,
+            test_loader,
+            key_fn=lambda d: list(zip(d["color"], d["age"], d["region"])),
+            device=device,
+            alpha=alpha,
+        ),
+    }
+
+    if getattr(exp_cfg, "run_afcp_adaptive", False):
+        cal_np = loader_to_numpy(cal_loader)
+        test_np = loader_to_numpy(test_loader)
+        X_calib = cal_np["x"].astype(np.float32)
+        Y_calib = cal_np["y"].astype(int)
+        X_test = test_np["x"].astype(np.float32)
+
+        batch0 = next(iter(cal_loader))
+        d = int(X_calib.shape[1])
+        n_check = min(256, len(X_calib))
+
+        group_X_calib = None
+        group_X_test = None
+
+        if len(batch0) == 5:
+            att_idx_emb = [d - 1, d - 2, d - 3]
+            embedded_ok = False
+            if n_check > 0:
+                embedded_ok = float(np.mean(X_calib[:n_check, att_idx_emb[0]].astype(int) == cal_np["color"][:n_check].astype(int))) >= 0.95
+            if embedded_ok:
+                att_idx = att_idx_emb
+            else:
+                group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"]]).astype(int)
+                group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"]]).astype(int)
+                att_idx = [0, 1, 2]
+        elif len(batch0) == 6:
+            att_idx = [d - 1, d - 2, d - 4]
+        else:
+            raise ValueError(f"AFCPAdaptiveSelection expects 5- or 6-field batches, got {len(batch0)}")
+
+        afcp = AFCPAdaptiveSelection(alpha=alpha, ttest_delta=getattr(exp_cfg, "afcp_ttest_delta", None), random_state=getattr(exp_cfg, "seed", 2024))
+        C_sets_afcp, _k_hat = afcp.multiclass_classification(
+            X_calib=X_calib,
+            Y_calib=Y_calib,
+            X_test=X_test,
+            backbone=backbone,
+            att_idx=att_idx,
+            return_khat=True,
+            conditional=False,
+            left_tail=False,
+            device=device,
+            group_X_calib=group_X_calib,
+            group_X_test=group_X_test,
+            show_progress=True,
+        )
+        results["AFCP"] = prediction_sets_to_metrics(test_np, C_sets_afcp, alpha)
+
+    hard_cp = calibrate_hard_cluster_cp(
+        backbone,
+        cal_loader,
+        alpha=alpha,
+        K=model_cfg.num_prototypes,
+        device=device,
+        seed=exp_cfg.hard_cluster_seed,
+    )
+    results["Clustered CP"] = evaluate_hard_cluster_cp(backbone, hard_cp, test_loader, device=device, alpha=alpha)
+
+    soft_assign = PrototypeAssignment(
+        backbone=backbone,
+        num_prototypes=model_cfg.num_prototypes,
+        temperature=model_cfg.temperature,
+    )
+    soft_assign = train_prototype_assignment(
+        soft_assign,
+        train_loader,
+        epochs=soft_cfg.epochs,
+        lr=soft_cfg.lr,
+        lambda_balance=soft_cfg.lambda_balance,
+        device=device,
+    )
+    soft_cp = calibrate_prototype_cp(
+        backbone,
+        soft_assign,
+        cal_loader,
+        alpha=alpha,
+        device=device,
+        mode=soft_cfg.mode,
+        gamma=soft_cfg.gamma,
+    )
+    results["Prototype CP"] = evaluate_prototype_cp(
+        backbone,
+        soft_assign,
+        soft_cp,
+        test_loader,
+        device=device,
+        alpha=alpha,
+    )
+    
+    results["FaReG"] = evaluate_fareg_cp(
+        backbone=backbone,
+        cal_loader=cal_loader,
+        test_loader=test_loader,
+        alpha=alpha,
+        device=device,
+    )
+
+    return results
+
+
 
 
 def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, sgcp_cfg, device):

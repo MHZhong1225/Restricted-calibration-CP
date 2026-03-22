@@ -104,7 +104,7 @@ CONFIG_PREFIXES = (
     "dataset.",
     "model.",
     "backbone_train.",
-    "softproto_train.",
+    "proto_train.",
     "sgcp_train.",
 )
 

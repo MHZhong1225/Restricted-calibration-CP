@@ -161,7 +161,7 @@ def train_stochastic_assignment(
 
 
 
-def train_soft_prototype_assignment(model, train_loader, epochs=80, lr=1e-2, lambda_balance=1.0, device="cpu"):
+def train_prototype_assignment(model, train_loader, epochs=80, lr=1e-2, lambda_balance=1.0, device="cpu"):
     model = model.to(device)
     for p in model.backbone.parameters():
         p.requires_grad = False
@@ -193,6 +193,6 @@ def train_soft_prototype_assignment(model, train_loader, epochs=80, lr=1e-2, lam
             total_n += x.size(0)
 
         if (epoch + 1) % 20 == 0:
-            print(f"[SoftProto] Epoch {epoch + 1:03d} | loss={total_loss / total_n:.4f}")
+            print(f"[Proto] Epoch {epoch + 1:03d} | loss={total_loss / total_n:.4f}")
 
     return model

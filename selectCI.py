@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backbone-epochs", type=int, default=200)
     parser.add_argument("--backbone-lr", type=float, default=1e-3)
 
-    # soft prototype
+    # stochastic
     parser.add_argument("--soft-epochs", type=int, default=100)
     parser.add_argument("--soft-lr", type=float, default=1e-2)
     parser.add_argument("--soft-lambda-balance", type=float, default=1.0)

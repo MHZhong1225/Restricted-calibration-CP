@@ -58,7 +58,7 @@ class StochasticMLP(nn.Module):
         sigma = F.softplus(out[:, self.out_dim:]) + self.min_sig
         return mu, sigma
 
-class SoftPrototypeAssignment(nn.Module):
+class PrototypeAssignment(nn.Module):
     def __init__(self, backbone: Backbone, num_prototypes=8, temperature=1.0):
         super().__init__()
         self.backbone = backbone

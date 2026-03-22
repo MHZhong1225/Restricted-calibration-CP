@@ -122,7 +122,7 @@ def simple_kmeans(X, K=8, iters=50, seed=42):
 
 
 @torch.no_grad()
-def extract_softproto_weights(model, loader, device="cpu"):
+def extract_proto_weights(model, loader, device="cpu"):
     model.eval()
     all_w = []
     for x, *_rest in loader:

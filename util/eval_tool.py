@@ -3,7 +3,7 @@ import torch
 from .utils import conformal_quantile, extract_all
 from SelectiveCI_fairness.cp_obj import *
 from util.utils import prediction_set_from_probs_and_thresholds
-from util.utils import simple_kmeans, extract_sgcp_weights, extract_softproto_weights, weighted_quantile
+from util.utils import simple_kmeans, extract_sgcp_weights, extract_proto_weights, weighted_quantile
 
 # =========================
 # Calibration
@@ -106,14 +106,14 @@ def calibrate_hard_cluster_cp(backbone, cal_loader, alpha=0.1, K=8, device="cpu"
         idx = np.where(clusters == k)[0]
         thresholds[k] = global_q if len(idx) < 8 else conformal_quantile(scores[idx], alpha)
 
-    return HardClusterCP(cluster_thresholds=thresholds, cluster_centers=centers)
+    return ClusteredCP(cluster_thresholds=thresholds, cluster_centers=centers)
 
 
 @torch.no_grad()
-def calibrate_soft_prototype_cp(backbone, assign_model, cal_loader, alpha=0.1, device="cpu", mode="top1", gamma=1.0):
+def calibrate_prototype_cp(backbone, assign_model, cal_loader, alpha=0.1, device="cpu", mode="top1", gamma=1.0):
     data = extract_all(backbone, cal_loader, device=device)
     scores = data["scores"]
-    weights = extract_softproto_weights(assign_model, cal_loader, device=device)
+    weights = extract_proto_weights(assign_model, cal_loader, device=device)
     K = weights.shape[1]
 
     global_q = conformal_quantile(scores, alpha)
@@ -123,7 +123,7 @@ def calibrate_soft_prototype_cp(backbone, assign_model, cal_loader, alpha=0.1, d
         w = weights[:, k]
         thresholds[k] = global_q if np.sum(w > 1e-4) < 8 else weighted_quantile(scores, w, 1 - alpha)
 
-    return SoftPrototypeCP(prototype_thresholds=thresholds, mode=mode, gamma=gamma)
+    return PrototypeCP(prototype_thresholds=thresholds, mode=mode, gamma=gamma)
 
 
 @torch.no_grad()
@@ -196,9 +196,9 @@ def evaluate_hard_cluster_cp(backbone, cp_obj, test_loader, device="cpu", alpha=
 
 
 @torch.no_grad()
-def evaluate_soft_prototype_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", alpha=None):
+def evaluate_prototype_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", alpha=None):
     data = extract_all(backbone, test_loader, device=device)
-    weights = extract_softproto_weights(assign_model, test_loader, device=device)
+    weights = extract_proto_weights(assign_model, test_loader, device=device)
     thresholds = cp_obj.threshold_for_batch(weights)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
     return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
