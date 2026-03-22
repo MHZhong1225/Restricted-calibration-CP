@@ -47,17 +47,6 @@ class SoftPrototypeCP:
         return self.prototype_thresholds[top_idx]
 
 
-@dataclass
-class BinnedSLSCP:
-    bin_edges: np.ndarray
-    bin_thresholds: np.ndarray
-    fallback_threshold: float
-
-    def threshold_for_batch(self, difficulties):
-        difficulties = np.asarray(difficulties, dtype=np.float32)
-        idx = np.digitize(difficulties, self.bin_edges[1:-1], right=False)
-        idx = np.clip(idx, 0, len(self.bin_thresholds) - 1)
-        return self.bin_thresholds[idx]
 
 
 def _eval_step_ecdf(scores_sorted: np.ndarray, cdf_sorted: np.ndarray, s: np.ndarray) -> np.ndarray:

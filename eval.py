@@ -122,6 +122,46 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         ),
     }
 
+    if getattr(exp_cfg, "run_afcp_adaptive", False):
+        cal_np = loader_to_numpy(cal_loader)
+        test_np = loader_to_numpy(test_loader)
+        X_calib = cal_np["x"].astype(np.float32)
+        Y_calib = cal_np["y"].astype(int)
+        X_test = test_np["x"].astype(np.float32)
+
+        batch0 = next(iter(cal_loader))
+        d = int(X_calib.shape[1])
+        if len(batch0) == 5:
+            att_idx = [d - 1, d - 2, d - 3]
+        elif len(batch0) == 6:
+            att_idx = [d - 1, d - 2, d - 4]
+        else:
+            raise ValueError(f"AFCPAdaptiveSelection expects 5- or 6-field batches, got {len(batch0)}")
+
+        n_check = min(256, len(X_calib))
+        if n_check > 0:
+            x_color = X_calib[:n_check, att_idx[0]].astype(int)
+            color = cal_np["color"][:n_check].astype(int)
+            if float(np.mean(x_color == color)) < 0.95:
+                raise ValueError(
+                    "AFCPAdaptiveSelection baseline expects sensitive attributes to be embedded in x (e.g., synthetic data). "
+                    "Current loader provides color/age/region separately (e.g., MIMIC), so AFCPAdaptiveSelection is disabled."
+                )
+
+        afcp = AFCPAdaptiveSelection(alpha=alpha, ttest_delta=getattr(exp_cfg, "afcp_ttest_delta", None), random_state=getattr(exp_cfg, "seed", 2024))
+        C_sets_afcp, _k_hat = afcp.multiclass_classification(
+            X_calib=X_calib,
+            Y_calib=Y_calib,
+            X_test=X_test,
+            backbone=backbone,
+            att_idx=att_idx,
+            return_khat=True,
+            conditional=False,
+            left_tail=False,
+            device=device,
+        )
+        results["AFCP Adaptive Selection"] = prediction_sets_to_metrics(test_np, C_sets_afcp, alpha)
+
     hard_cp = calibrate_hard_cluster_cp(
         backbone,
         cal_loader,

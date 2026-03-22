@@ -133,7 +133,7 @@ def extract_softproto_weights(model, loader, device="cpu"):
 
 
 @torch.no_grad()
-def extract_sls_weights(model, loader, device="cpu", n_latent_samples=10):
+def extract_sgcp_weights(model, loader, device="cpu", n_latent_samples=10):
     model.eval()
     all_w = []
     for x, *_rest in loader:
@@ -144,7 +144,7 @@ def extract_sls_weights(model, loader, device="cpu", n_latent_samples=10):
 
 
 @torch.no_grad()
-def extract_sls_difficulties(model, loader, device="cpu", n_latent_samples=10):
+def extract_sgcp_difficulties(model, loader, device="cpu", n_latent_samples=10):
     model.eval()
     all_d = []
     for x, *_rest in loader:

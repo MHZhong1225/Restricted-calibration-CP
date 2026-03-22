@@ -83,9 +83,9 @@ def apply_overrides(
                 raise ValueError(
                     f'Invalid grid key "{dotted_key}". If you want to sweep over random seeds, '
                     f'use CLI flag "--seeds 0 1 2" or put "seeds": [0,1,2] in grid.json. '
-                    f'Other keys must be dotted names like "sls_train.lr".'
+                    f'Other keys must be dotted names like "sgcp_train.lr".'
                 )
-            raise ValueError(f'Invalid grid key "{dotted_key}". Expected dotted name like "sls_train.lr".')
+            raise ValueError(f'Invalid grid key "{dotted_key}". Expected dotted name like "sgcp_train.lr".')
 
         prefix, attr = dotted_key.split(".", 1)
         if prefix not in cfg:
@@ -105,7 +105,7 @@ CONFIG_PREFIXES = (
     "model.",
     "backbone_train.",
     "softproto_train.",
-    "sls_train.",
+    "sgcp_train.",
 )
 
 def aggregate_summary_from_df(df: pd.DataFrame) -> pd.DataFrame:

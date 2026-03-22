@@ -3,7 +3,7 @@ import torch
 from .utils import conformal_quantile, extract_all
 from SelectiveCI_fairness.cp_obj import *
 from util.utils import prediction_set_from_probs_and_thresholds
-from util.utils import simple_kmeans, extract_sls_weights, extract_softproto_weights, weighted_quantile
+from util.utils import simple_kmeans, extract_sgcp_weights, extract_softproto_weights, weighted_quantile
 
 # =========================
 # Calibration
@@ -130,7 +130,7 @@ def calibrate_soft_prototype_cp(backbone, assign_model, cal_loader, alpha=0.1, d
 def calibrate_sgcp(backbone, assign_model, cal_loader, alpha=0.1, device="cpu", n_latent_samples=10):
     data = extract_all(backbone, cal_loader, device=device)
     scores = np.asarray(data["scores"], dtype=np.float32)
-    weights = extract_sls_weights(assign_model, cal_loader, device=device, n_latent_samples=n_latent_samples).astype(np.float32)
+    weights = extract_sgcp_weights(assign_model, cal_loader, device=device, n_latent_samples=n_latent_samples).astype(np.float32)
 
     row_sum = np.sum(weights, axis=1, keepdims=True)
     row_sum = np.clip(row_sum, 1e-12, None)
@@ -208,7 +208,7 @@ def evaluate_soft_prototype_cp(backbone, assign_model, cp_obj, test_loader, devi
 def evaluate_sg_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", n_latent_samples=10, alpha=None):
     data = extract_all(backbone, test_loader, device=device)
     probs = np.asarray(data["probs"], dtype=np.float32)
-    weights = extract_sls_weights(assign_model, test_loader, device=device, n_latent_samples=n_latent_samples).astype(np.float32)
+    weights = extract_sgcp_weights(assign_model, test_loader, device=device, n_latent_samples=n_latent_samples).astype(np.float32)
     row_sum = np.sum(weights, axis=1, keepdims=True)
     row_sum = np.clip(row_sum, 1e-12, None)
     weights = weights / row_sum
