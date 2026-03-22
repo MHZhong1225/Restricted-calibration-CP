@@ -160,12 +160,12 @@ class AFCPAdaptiveSelection:
             miscov_ind = E
         return max_miscov, np.asarray(miscov_ind, dtype=float)
 
-    def select_the_worst_group(self, att_idx, E, X_aug):
+    def select_the_worst_group(self, att_idx, E, group_aug):
         max_max_miscov = -1.0
         best_att = []
         best_miscov_ind = np.asarray(E, dtype=float)
         for att in att_idx:
-            max_cov_temp, miscov_ind_temp = self.error_func_groupwise(phi_k=X_aug[:, att], E=E)
+            max_cov_temp, miscov_ind_temp = self.error_func_groupwise(phi_k=group_aug[:, att], E=E)
             if max_cov_temp >= max_max_miscov:
                 max_max_miscov = max_cov_temp
                 best_att = att
@@ -176,7 +176,21 @@ class AFCPAdaptiveSelection:
                 return []
         return best_att
 
-    def multiclass_classification(self, X_calib, Y_calib, X_test, backbone, att_idx, return_khat=True, conditional=False, left_tail=False, device='cpu'):
+    def multiclass_classification(
+        self,
+        X_calib,
+        Y_calib,
+        X_test,
+        backbone,
+        att_idx,
+        return_khat=True,
+        conditional=False,
+        left_tail=False,
+        device='cpu',
+        group_X_calib=None,
+        group_X_test=None,
+        show_progress=True,
+    ):
         n_test = X_test.shape[0]
         labels = np.array(sorted(set(Y_calib.tolist() if hasattr(Y_calib, 'tolist') else list(Y_calib))))
         k_final = []
@@ -185,29 +199,39 @@ class AFCPAdaptiveSelection:
         test_scores = np.full((n_test, len(labels)), -np.inf)
         conf_pval_y = np.full((n_test, len(labels)), -np.inf)
         conf_pval_add = np.full((n_test, len(labels)), -np.inf)
+        if group_X_calib is None:
+            group_X_calib = X_calib
+        if group_X_test is None:
+            group_X_test = X_test
         for idx, y in enumerate(labels):
             test_scores[:, idx] = nonconf_scores_mc_np(X_test, np.repeat(y, n_test), backbone, device=device)
-        for i, x in enumerate(X_test):
+        from tqdm.auto import tqdm
+        it = tqdm(range(n_test), desc="AFCP", leave=False, disable=not bool(show_progress))
+        for i in it:
+            x = X_test[i]
+            gx = group_X_test[i]
             k_hat_i = []
             for idx, y in enumerate(labels):
                 idx_y = np.where(Y_calib == y)[0] if conditional else np.arange(len(Y_calib))
                 X_calib_y = X_calib[idx_y]
                 Y_calib_y = Y_calib[idx_y]
+                group_calib_y = np.asarray(group_X_calib[idx_y])
                 X_aug, Y_aug = self.augment_data(X_calib_y, Y_calib_y, x, y)
                 scores_aug = np.append(calib_scores[idx_y], test_scores[i, idx])
                 n_union = X_aug.shape[0]
+                group_aug = np.vstack([group_calib_y, np.asarray(gx)[None, :]])
                 E = []
                 for j in range(n_union):
                     not_j = np.array([k for k in range(n_union) if k != j], dtype=int)
                     C_temp = arc_wrapper_np(scores_aug[not_j], X_aug[j][None, :], backbone, self.alpha, device=device)
                     E.append(float(int(Y_aug[j]) not in C_temp[0]))
-                k_hat = self.select_the_worst_group(att_idx, E, X_aug)
+                k_hat = self.select_the_worst_group(att_idx, E, group_aug)
                 if k_hat == []:
                     k_hat_i.append(set())
                     calib_scores_selected = scores_aug[:-1]
                 else:
                     k_hat_i.append({int(k_hat)})
-                    mask = np.where(X_calib_y[:, k_hat] == x[k_hat])[0]
+                    mask = np.where(group_calib_y[:, int(k_hat)] == np.asarray(gx)[int(k_hat)])[0]
                     calib_scores_selected = np.asarray(scores_aug[:-1])[mask]
                 conf_pval_y[i, idx] = compute_conf_pvals_np(scores_aug[-1], calib_scores_selected, left_tail=left_tail)
                 conf_pval_add[i, idx] = compute_conf_pvals_np(scores_aug[-1], scores_aug[:-1], left_tail=left_tail)

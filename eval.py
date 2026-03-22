@@ -131,22 +131,26 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
 
         batch0 = next(iter(cal_loader))
         d = int(X_calib.shape[1])
+        n_check = min(256, len(X_calib))
+
+        group_X_calib = None
+        group_X_test = None
+
         if len(batch0) == 5:
-            att_idx = [d - 1, d - 2, d - 3]
+            att_idx_emb = [d - 1, d - 2, d - 3]
+            embedded_ok = False
+            if n_check > 0:
+                embedded_ok = float(np.mean(X_calib[:n_check, att_idx_emb[0]].astype(int) == cal_np["color"][:n_check].astype(int))) >= 0.95
+            if embedded_ok:
+                att_idx = att_idx_emb
+            else:
+                group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"]]).astype(int)
+                group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"]]).astype(int)
+                att_idx = [0, 1, 2]
         elif len(batch0) == 6:
             att_idx = [d - 1, d - 2, d - 4]
         else:
             raise ValueError(f"AFCPAdaptiveSelection expects 5- or 6-field batches, got {len(batch0)}")
-
-        n_check = min(256, len(X_calib))
-        if n_check > 0:
-            x_color = X_calib[:n_check, att_idx[0]].astype(int)
-            color = cal_np["color"][:n_check].astype(int)
-            if float(np.mean(x_color == color)) < 0.95:
-                raise ValueError(
-                    "AFCPAdaptiveSelection baseline expects sensitive attributes to be embedded in x (e.g., synthetic data). "
-                    "Current loader provides color/age/region separately (e.g., MIMIC), so AFCPAdaptiveSelection is disabled."
-                )
 
         afcp = AFCPAdaptiveSelection(alpha=alpha, ttest_delta=getattr(exp_cfg, "afcp_ttest_delta", None), random_state=getattr(exp_cfg, "seed", 2024))
         C_sets_afcp, _k_hat = afcp.multiclass_classification(
@@ -159,6 +163,9 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
             conditional=False,
             left_tail=False,
             device=device,
+            group_X_calib=group_X_calib,
+            group_X_test=group_X_test,
+            show_progress=True,
         )
         results["AFCP Adaptive Selection"] = prediction_sets_to_metrics(test_np, C_sets_afcp, alpha)
 
