@@ -247,6 +247,48 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         ),
     }
 
+    hard_cp = calibrate_hard_cluster_cp(
+        backbone,
+        cal_loader,
+        alpha=alpha,
+        K=model_cfg.num_prototypes,
+        device=device,
+        seed=exp_cfg.hard_cluster_seed,
+    )
+    results["Clustered CP"] = evaluate_hard_cluster_cp(backbone, hard_cp, test_loader, device=device, alpha=alpha)
+
+    soft_assign = PrototypeAssignment(
+        backbone=backbone,
+        num_prototypes=model_cfg.num_prototypes,
+        temperature=model_cfg.temperature,
+    )
+    soft_assign = train_prototype_assignment(
+        soft_assign,
+        train_loader,
+        epochs=soft_cfg.epochs,
+        lr=soft_cfg.lr,
+        lambda_balance=soft_cfg.lambda_balance,
+        device=device,
+    )
+    soft_cp = calibrate_prototype_cp(
+        backbone,
+        soft_assign,
+        cal_loader,
+        alpha=alpha,
+        device=device,
+        mode=soft_cfg.mode,
+        gamma=soft_cfg.gamma,
+    )
+    results["Prototype CP"] = evaluate_prototype_cp(
+        backbone,
+        soft_assign,
+        soft_cp,
+        test_loader,
+        device=device,
+        alpha=alpha,
+    )
+    
+
     if getattr(exp_cfg, "run_afcp_adaptive", False):
         cal_np = loader_to_numpy(cal_loader)
         test_np = loader_to_numpy(test_loader)
@@ -294,47 +336,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         )
         results["AFCP"] = prediction_sets_to_metrics(test_np, C_sets_afcp, alpha)
 
-    hard_cp = calibrate_hard_cluster_cp(
-        backbone,
-        cal_loader,
-        alpha=alpha,
-        K=model_cfg.num_prototypes,
-        device=device,
-        seed=exp_cfg.hard_cluster_seed,
-    )
-    results["Clustered CP"] = evaluate_hard_cluster_cp(backbone, hard_cp, test_loader, device=device, alpha=alpha)
 
-    soft_assign = PrototypeAssignment(
-        backbone=backbone,
-        num_prototypes=model_cfg.num_prototypes,
-        temperature=model_cfg.temperature,
-    )
-    soft_assign = train_prototype_assignment(
-        soft_assign,
-        train_loader,
-        epochs=soft_cfg.epochs,
-        lr=soft_cfg.lr,
-        lambda_balance=soft_cfg.lambda_balance,
-        device=device,
-    )
-    soft_cp = calibrate_prototype_cp(
-        backbone,
-        soft_assign,
-        cal_loader,
-        alpha=alpha,
-        device=device,
-        mode=soft_cfg.mode,
-        gamma=soft_cfg.gamma,
-    )
-    results["Prototype CP"] = evaluate_prototype_cp(
-        backbone,
-        soft_assign,
-        soft_cp,
-        test_loader,
-        device=device,
-        alpha=alpha,
-    )
-    
     results["FaReG"] = evaluate_fareg_cp(
         backbone=backbone,
         cal_loader=cal_loader,
@@ -344,7 +346,6 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
     )
 
     return results
-
 
 
 
