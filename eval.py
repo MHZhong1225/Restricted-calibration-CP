@@ -237,7 +237,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
             device=device,
             alpha=alpha,
         ),
-        "Exhaustive Cp": evaluate_fixed_group_cp(
+        "Exhaustive CP": evaluate_fixed_group_cp(
             backbone,
             exhaustive_cp,
             test_loader,
