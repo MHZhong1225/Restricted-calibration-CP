@@ -55,7 +55,7 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
             "batch_size": 128,
             "dataset_mode": "single_sensitive",
             "mimic_preprocessed_path": "",
-            "mimic_n_use": 0,
+            "n_tra_cal": 0,
             "mimic_train_frac": 0.6,
             "mimic_cal_frac": 0.2,
             "mimic_label_col": "label",
@@ -185,7 +185,7 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
         {
             "alpha": args.alpha,
             "hard_cluster_seed": getattr(args, "hard_cluster_seed", args.seed),
-            "outdir": args.outdir,
+            "outdir": args.outdir+f"_{args.alpha}",
             "methods": args.methods,
             "seed": args.seed,
             "cuda": args.cuda,
@@ -205,7 +205,7 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
             "batch_size": args.batch_size,
             "dataset_mode": args.dataset_mode,
             "mimic_preprocessed_path": args.mimic_preprocessed_path,
-            "mimic_n_use": args.mimic_n_use,
+            "n_tra_cal": args.n_tra_cal,
             "mimic_train_frac": args.mimic_train_frac,
             "mimic_cal_frac": args.mimic_cal_frac,
             "mimic_label_col": args.mimic_label_col,
@@ -362,7 +362,7 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
     if data_cfg["dataset_mode"] == "mimic":
         mimic_cfg = SimpleNamespace(
             mimic_preprocessed_path=data_cfg["mimic_preprocessed_path"],
-            n_use=data_cfg.get("mimic_n_use", 0),
+            n_use=data_cfg.get("n_tra_cal", 0),
             train_frac=data_cfg.get("mimic_train_frac", 0.6),
             cal_frac=data_cfg.get("mimic_cal_frac", 0.2),
             label_col=data_cfg.get("mimic_label_col", "label"),
