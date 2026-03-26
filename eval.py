@@ -22,27 +22,31 @@ from util.eval_tool import (
     evaluate_sg_cp,
 )
 from util.utils import loader_to_numpy
-from util.train_tool import *
+from util.train_tool import train_prototype_assignment, train_stochastic_assignment
 
 def prediction_sets_to_metrics(test_np, C_sets, alpha):
     y = test_np['y']
-    color = test_np['color']
-    age = test_np['age']
-    region = test_np['region']
+    attr1 = test_np['color']
+    attr2 = test_np['age']
+    attr3 = test_np['region']
+
     cover = np.array([int(int(y[i]) in set(C_sets[i])) for i in range(len(y))], dtype=float)
     size = np.array([len(C_sets[i]) for i in range(len(y))], dtype=float)
+    
     def grp(vals, key):
         out = {}
         for k in sorted(np.unique(key)):
             m = key == k
             out[int(k)] = float(vals[m].mean()) if m.any() else float('nan')
         return out
+        
     def cov_gap_from_coverages(coverages):
         vals = [v for v in coverages.values() if not np.isnan(v)]
         if len(vals) == 0:
             return float("nan")
         target = 1.0 - float(alpha)
         return float(np.mean(np.abs(np.asarray(vals, dtype=float) - target)))
+        
     def cov_gap_from_keys(keys):
         uniq = np.unique(keys)
         if len(uniq) == 0:
@@ -57,30 +61,86 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
         if len(gaps) == 0:
             return float("nan")
         return float(np.mean(np.asarray(gaps, dtype=float)))
-    color_cov = grp(cover, color)
-    age_cov = grp(cover, age)
-    region_cov = grp(cover, region)
-    joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(color, age, region)], dtype=object)
-    covgap_color = cov_gap_from_coverages(color_cov)
-    covgap_age = cov_gap_from_coverages(age_cov)
-    covgap_region = cov_gap_from_coverages(region_cov)
+    
+    attr1_cov = grp(cover, attr1)
+    attr2_cov = grp(cover, attr2)
+    attr3_cov = grp(cover, attr3)
+    
+    attr4 = test_np.get("diag")
+    attr4_cov = grp(cover, attr4) if attr4 is not None else {}
+    attr4_size = grp(size, attr4) if attr4 is not None else {}
+    
+    attr5 = test_np.get("attr5")
+    attr5_cov = grp(cover, attr5) if attr5 is not None else {}
+    attr5_size = grp(size, attr5) if attr5 is not None else {}
+    
+    attr6 = test_np.get("attr6")
+    attr6_cov = grp(cover, attr6) if attr6 is not None else {}
+    attr6_size = grp(size, attr6) if attr6 is not None else {}
+    
+    attr7 = test_np.get("attr7")
+    attr7_cov = grp(cover, attr7) if attr7 is not None else {}
+    attr7_size = grp(size, attr7) if attr7 is not None else {}
+
+    joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(attr1, attr2, attr3)], dtype=object)
+    covgap_attr1 = cov_gap_from_coverages(attr1_cov)
+    covgap_attr2 = cov_gap_from_coverages(attr2_cov)
+    covgap_attr3 = cov_gap_from_coverages(attr3_cov)
+    covgap_attr4 = cov_gap_from_coverages(attr4_cov) if attr4 is not None else float("nan")
     covgap = cov_gap_from_keys(joint_keys)
-    return {
+    
+    out = {
         'overall_coverage': float(cover.mean()),
         'avg_set_size': float(size.mean()),
-        'color_coverages': color_cov,
-        'color_set_sizes': grp(size, color),
-        'age_coverages': age_cov,
-        'age_set_sizes': grp(size, age),
-        'region_coverages': region_cov,
-        'region_set_sizes': grp(size, region),
-        'blue_coverage': float(cover[color == 1].mean()),
-        'blue_avg_set_size': float(size[color == 1].mean()),
+        'attr1_coverages': attr1_cov,
+        'attr1_set_sizes': grp(size, attr1),
+        'attr2_coverages': attr2_cov,
+        'attr2_set_sizes': grp(size, attr2),
+        'attr3_coverages': attr3_cov,
+        'attr3_set_sizes': grp(size, attr3),
+        'attr4_coverages': attr4_cov,
+        'attr4_set_sizes': attr4_size,
+        'blue_coverage': float(cover[attr1 == 1].mean()) if 1 in attr1 else float("nan"),
+        'blue_avg_set_size': float(size[attr1 == 1].mean()) if 1 in attr1 else float("nan"),
         'covgap': covgap,
-        'covgap_color': covgap_color,
-        'covgap_age': covgap_age,
-        'covgap_region': covgap_region,
+        'covgap_attr1': covgap_attr1,
+        'covgap_attr2': covgap_attr2,
+        'covgap_attr3': covgap_attr3,
+        'covgap_attr4': covgap_attr4,
     }
+    
+    if attr4 is not None:
+        attr4_attr1_gaps = {}
+        for d in np.unique(attr4):
+            idx_d = (attr4 == d)
+            idx_c0 = idx_d & (attr1 == 0)
+            idx_c1 = idx_d & (attr1 == 1)
+            if idx_c0.any() and idx_c1.any():
+                cov0 = float(cover[idx_c0].mean())
+                cov1 = float(cover[idx_c1].mean())
+                attr4_attr1_gaps[int(d)] = abs(cov0 - cov1)
+        
+        out["attr4_attr1_gaps"] = attr4_attr1_gaps
+        gaps_list = list(attr4_attr1_gaps.values())
+        out["fairgap_attr4_attr1_mean"] = float(np.mean(gaps_list)) if gaps_list else float("nan")
+        out["fairgap_attr4_attr1_max"] = float(np.max(gaps_list)) if gaps_list else float("nan")
+        
+    if attr5 is not None:
+        out.update({
+            "attr5_coverages": attr5_cov, "attr5_set_sizes": attr5_size,
+            "attr6_coverages": attr6_cov, "attr6_set_sizes": attr6_size,
+            "attr7_coverages": attr7_cov, "attr7_set_sizes": attr7_size,
+            "covgap_attr5": cov_gap_from_coverages(attr5_cov),
+            "covgap_attr6": cov_gap_from_coverages(attr6_cov),
+            "covgap_attr7": cov_gap_from_coverages(attr7_cov),
+        })
+        
+    if 0 in attr1_cov and 1 in attr1_cov:
+        out["fairgap_attr1"] = abs(attr1_cov[0] - attr1_cov[1])
+    else:
+        out["fairgap_attr1"] = float("nan")
+        
+    return out
 
 
 
@@ -316,8 +376,18 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
                 att_idx = [0, 1, 2]
         elif len(batch0) == 6:
             att_idx = [d - 1, d - 2, d - 4]
+        elif len(batch0) == 7:
+            # MIMIC/Adult data with diag/attr4
+            group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"], cal_np["diag"]]).astype(int)
+            group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"], test_np["diag"]]).astype(int)
+            att_idx = [0, 1, 2, 3]
+        elif len(batch0) == 9:
+            # Nursery data with 7 attributes
+            group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"], cal_np["diag"], cal_np["attr5"], cal_np["attr6"], cal_np["attr7"]]).astype(int)
+            group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"], test_np["diag"], test_np["attr5"], test_np["attr6"], test_np["attr7"]]).astype(int)
+            att_idx = [0, 1, 2, 3, 4, 5, 6]
         else:
-            raise ValueError(f"AFCPAdaptiveSelection expects 5- or 6-field batches, got {len(batch0)}")
+            raise ValueError(f"AFCPAdaptiveSelection expects 5-, 6-, 7-, or 9-field batches, got {len(batch0)}")
 
         afcp = AFCPAdaptiveSelection(alpha=alpha, ttest_delta=getattr(exp_cfg, "afcp_ttest_delta", None), random_state=getattr(exp_cfg, "seed", 2024))
         C_sets_afcp, _k_hat = afcp.multiclass_classification(

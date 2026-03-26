@@ -17,7 +17,7 @@ def calibrate_global_cp(backbone, cal_loader, alpha=0.1, device="cpu"):
 
 
 
-def evaluate_prediction_sets(pred_sets, y_true, color, age, region, alpha=None):
+def evaluate_prediction_sets(pred_sets, y_true, attr1, attr2, attr3, attr4=None, attr5=None, attr6=None, attr7=None, alpha=None):
     cover = np.array([int(y_true[i] in pred_sets[i]) for i in range(len(y_true))])
     sizes = np.array([len(s) for s in pred_sets])
 
@@ -29,22 +29,40 @@ def evaluate_prediction_sets(pred_sets, y_true, color, age, region, alpha=None):
             szs[int(g)] = float(sizes[idx].mean())
         return covs, szs
 
-    color_covs, color_sizes = group_stats(color)
-    age_covs, age_sizes = group_stats(age)
-    region_covs, region_sizes = group_stats(region)
+    attr1_covs, attr1_sizes = group_stats(attr1)
+    attr2_covs, attr2_sizes = group_stats(attr2)
+    attr3_covs, attr3_sizes = group_stats(attr3)
+    if attr4 is not None:
+        attr4_covs, attr4_sizes = group_stats(attr4)
+    else:
+        attr4_covs, attr4_sizes = {}, {}
+        
+    attr5_covs, attr5_sizes = group_stats(attr5) if attr5 is not None else ({}, {})
+    attr6_covs, attr6_sizes = group_stats(attr6) if attr6 is not None else ({}, {})
+    attr7_covs, attr7_sizes = group_stats(attr7) if attr7 is not None else ({}, {})
 
     out = {
         "overall_coverage": float(cover.mean()),
         "avg_set_size": float(sizes.mean()),
-        "color_coverages": color_covs,
-        "color_set_sizes": color_sizes,
-        "age_coverages": age_covs,
-        "age_set_sizes": age_sizes,
-        "region_coverages": region_covs,
-        "region_set_sizes": region_sizes,
-        "blue_coverage": float(cover[color == 1].mean()),
-        "blue_avg_set_size": float(sizes[color == 1].mean()),
+        "attr1_coverages": attr1_covs,
+        "attr1_set_sizes": attr1_sizes,
+        "attr2_coverages": attr2_covs,
+        "attr2_set_sizes": attr2_sizes,
+        "attr3_coverages": attr3_covs,
+        "attr3_set_sizes": attr3_sizes,
+        "attr4_coverages": attr4_covs,
+        "attr4_set_sizes": attr4_sizes,
+        "blue_coverage": float(cover[attr1 == 1].mean()) if 1 in attr1 else float("nan"),
+        "blue_avg_set_size": float(sizes[attr1 == 1].mean()) if 1 in attr1 else float("nan"),
     }
+    
+    if attr5 is not None:
+        out.update({
+            "attr5_coverages": attr5_covs, "attr5_set_sizes": attr5_sizes,
+            "attr6_coverages": attr6_covs, "attr6_set_sizes": attr6_sizes,
+            "attr7_coverages": attr7_covs, "attr7_set_sizes": attr7_sizes,
+        })
+
     if alpha is not None:
         target = 1.0 - float(alpha)
         def cov_gap_from_coverages(coverages):
@@ -65,11 +83,43 @@ def evaluate_prediction_sets(pred_sets, y_true, color, age, region, alpha=None):
             if len(gaps) == 0:
                 return float("nan")
             return float(np.mean(np.asarray(gaps, dtype=float)))
-        joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(color, age, region)], dtype=object)
+        
+        joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(attr1, attr2, attr3)], dtype=object)
         out["covgap"] = cov_gap_from_keys(joint_keys)
-        out["covgap_color"] = cov_gap_from_coverages(color_covs)
-        out["covgap_age"] = cov_gap_from_coverages(age_covs)
-        out["covgap_region"] = cov_gap_from_coverages(region_covs)
+        out["covgap_attr1"] = cov_gap_from_coverages(attr1_covs)
+        out["covgap_attr2"] = cov_gap_from_coverages(attr2_covs)
+        out["covgap_attr3"] = cov_gap_from_coverages(attr3_covs)
+        
+        if attr4 is not None:
+            out["covgap_attr4"] = cov_gap_from_coverages(attr4_covs)
+            
+            # Additional fairness gap for attr4 (minority consistency)
+            attr4_attr1_gaps = {}
+            for d in np.unique(attr4):
+                idx_d = (attr4 == d)
+                idx_c0 = idx_d & (attr1 == 0)
+                idx_c1 = idx_d & (attr1 == 1)
+                if idx_c0.any() and idx_c1.any():
+                    cov0 = float(cover[idx_c0].mean())
+                    cov1 = float(cover[idx_c1].mean())
+                    attr4_attr1_gaps[int(d)] = abs(cov0 - cov1)
+            
+            out["attr4_attr1_gaps"] = attr4_attr1_gaps
+            gaps_list = list(attr4_attr1_gaps.values())
+            out["fairgap_attr4_attr1_mean"] = float(np.mean(gaps_list)) if gaps_list else float("nan")
+            out["fairgap_attr4_attr1_max"] = float(np.max(gaps_list)) if gaps_list else float("nan")
+            
+        if attr5 is not None:
+            out["covgap_attr5"] = cov_gap_from_coverages(attr5_covs)
+            out["covgap_attr6"] = cov_gap_from_coverages(attr6_covs)
+            out["covgap_attr7"] = cov_gap_from_coverages(attr7_covs)
+            
+        # Overall attr1 fairness gap
+        if 0 in attr1_covs and 1 in attr1_covs:
+            out["fairgap_attr1"] = abs(attr1_covs[0] - attr1_covs[1])
+        else:
+            out["fairgap_attr1"] = float("nan")
+
     return out
 
 
@@ -175,7 +225,17 @@ def evaluate_global_cp(backbone, cp_obj, test_loader, device="cpu", alpha=None):
     data = extract_all(backbone, test_loader, device=device)
     thresholds = np.full(len(data["y"]), cp_obj.threshold, dtype=np.float32)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
+    
+    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:
+        n = len(data["y"])
+        probs = np.asarray(data["probs"], dtype=np.float32)
+        true_scores = 1.0 - probs[np.arange(n), data["y"]]
+        bins = np.quantile(true_scores, [0.33, 0.67])
+        data["age"] = np.digitize(true_scores, bins)
+        
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
+                                    attr4=data.get("diag"), attr5=data.get("attr5"), 
+                                    attr6=data.get("attr6"), attr7=data.get("attr7"), alpha=alpha)
 
 
 @torch.no_grad()
@@ -184,7 +244,17 @@ def evaluate_fixed_group_cp(backbone, cp_obj, test_loader, key_fn, device="cpu",
     keys = key_fn(data)
     thresholds = cp_obj.threshold_for_keys(keys)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
+    
+    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:
+        n = len(data["y"])
+        probs = np.asarray(data["probs"], dtype=np.float32)
+        true_scores = 1.0 - probs[np.arange(n), data["y"]]
+        bins = np.quantile(true_scores, [0.33, 0.67])
+        data["age"] = np.digitize(true_scores, bins)
+        
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
+                                    attr4=data.get("diag"), attr5=data.get("attr5"), 
+                                    attr6=data.get("attr6"), attr7=data.get("attr7"), alpha=alpha)
 
 
 @torch.no_grad()
@@ -192,7 +262,17 @@ def evaluate_hard_cluster_cp(backbone, cp_obj, test_loader, device="cpu", alpha=
     data = extract_all(backbone, test_loader, device=device)
     thresholds = cp_obj.threshold_for_batch(data["feats"])
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
+    
+    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:
+        n = len(data["y"])
+        probs = np.asarray(data["probs"], dtype=np.float32)
+        true_scores = 1.0 - probs[np.arange(n), data["y"]]
+        bins = np.quantile(true_scores, [0.33, 0.67])
+        data["age"] = np.digitize(true_scores, bins)
+        
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
+                                    attr4=data.get("diag"), attr5=data.get("attr5"), 
+                                    attr6=data.get("attr6"), attr7=data.get("attr7"), alpha=alpha)
 
 
 @torch.no_grad()
@@ -201,7 +281,17 @@ def evaluate_prototype_cp(backbone, assign_model, cp_obj, test_loader, device="c
     weights = extract_proto_weights(assign_model, test_loader, device=device)
     thresholds = cp_obj.threshold_for_batch(weights)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
+    
+    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:
+        n = len(data["y"])
+        probs = np.asarray(data["probs"], dtype=np.float32)
+        true_scores = 1.0 - probs[np.arange(n), data["y"]]
+        bins = np.quantile(true_scores, [0.33, 0.67])
+        data["age"] = np.digitize(true_scores, bins)
+        
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
+                                    attr4=data.get("diag"), attr5=data.get("attr5"), 
+                                    attr6=data.get("attr6"), attr7=data.get("attr7"), alpha=alpha)
 
 
 @torch.no_grad()
@@ -221,4 +311,16 @@ def evaluate_sg_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", n_
     for i in range(n):
         labels = [y for y in range(c) if float(v_all[i, y]) <= qv]
         pred_sets.append(labels)
-    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], alpha=alpha)
+        
+    # 为 BACH 添加难度分箱 (difficulty binning) 到 attr2
+    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:  # 假设只有占位符时才覆盖
+        # 按照预测目标的非一致性（1 - p(y)）作为难度
+        true_scores = 1.0 - probs[np.arange(n), data["y"]]
+        # 分为 3 箱：简单、中等、困难
+        bins = np.quantile(true_scores, [0.33, 0.67])
+        difficulty_bins = np.digitize(true_scores, bins)
+        data["age"] = difficulty_bins
+
+    return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
+                                    attr4=data.get("diag"), attr5=data.get("attr5"), 
+                                    attr6=data.get("attr6"), attr7=data.get("attr7"), alpha=alpha)

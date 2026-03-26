@@ -9,11 +9,48 @@ import copy
 import itertools
 import json
 
-from typing import Any, Dict
+from types import SimpleNamespace
+from dataset.synthetic import build_dataloaders_1, build_dataloaders_2
+from dataset.mimic import build_dataloaders_mimic
+from dataset.adult import build_dataloaders_adult
+from dataset.nursery import build_dataloaders_nursery
+from dataset.image_data import build_dataloaders_bach
+from typing import Dict, Any, Tuple
 
 
+def build_dataset_and_loaders(
+    data_cfg: Dict[str, Any],
+    model_cfg: Dict[str, Any],
+    seed: int,
+) -> Tuple[Any, Any, Any, str, Any]:
+    d_cfg = SimpleNamespace(**data_cfg)
+    d_cfg.seed = seed
 
-
+    if d_cfg.dataset_mode == "mimic":
+        tr_loader, ca_loader, te_loader, meta = build_dataloaders_mimic(d_cfg)
+        model_cfg["feature_dim"] = meta.feature_dim
+        return tr_loader, ca_loader, te_loader, "mimic", meta
+    elif d_cfg.dataset_mode == "adult":
+        tr_loader, ca_loader, te_loader, meta = build_dataloaders_adult(d_cfg)
+        model_cfg["feature_dim"] = meta.feature_dim
+        return tr_loader, ca_loader, te_loader, "adult", meta
+    elif d_cfg.dataset_mode == "nursery":
+        tr_loader, ca_loader, te_loader, meta = build_dataloaders_nursery(d_cfg)
+        model_cfg["feature_dim"] = meta.feature_dim
+        return tr_loader, ca_loader, te_loader, "nursery", meta
+    elif d_cfg.dataset_mode == "bach":
+        tr_loader, ca_loader, te_loader, meta = build_dataloaders_bach(d_cfg)
+        return tr_loader, ca_loader, te_loader, "bach", meta
+    elif d_cfg.dataset_mode == "single_sensitive":
+        tr_loader, ca_loader, te_loader, meta = build_dataloaders_1(d_cfg)
+        model_cfg["feature_dim"] = meta.feature_dim
+        return tr_loader, ca_loader, te_loader, "synthetic_1", meta
+    elif d_cfg.dataset_mode == "two_sensitive":
+        tr_loader, ca_loader, te_loader, meta = build_dataloaders_2(d_cfg)
+        model_cfg["feature_dim"] = meta.feature_dim
+        return tr_loader, ca_loader, te_loader, "synthetic_2", meta
+    else:
+        raise ValueError(f"Unknown dataset_mode: {d_cfg.dataset_mode}")
 
 def pop_seed_sweep_from_grid(grid: Dict[str, List[Any]]):
     for k in ("seeds", "seed", "experiment.seed"):
@@ -32,8 +69,13 @@ def resolve_seed_list(
         if grid_seed_list is not None:
             print(f'[sweep] Note: ignoring grid "{grid_seed_key}" because --seeds was provided.')
         return cli_seeds
-    if grid_seed_list is not None and len(grid_seed_list) > 0:
-        return grid_seed_list
+    if grid_seed_list is not None:
+        if isinstance(grid_seed_list, (int, np.integer)):
+            grid_seed_list = [int(grid_seed_list)]
+        elif not isinstance(grid_seed_list, (list, tuple)):
+            grid_seed_list = [grid_seed_list]
+        if len(grid_seed_list) > 0:
+            return [int(s) for s in grid_seed_list]
     return [default_seed]
 
 
@@ -205,4 +247,5 @@ def set_seed(seed=42):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False

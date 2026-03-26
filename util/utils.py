@@ -11,31 +11,53 @@ def kl_diagonal_gaussians(mu_q, sig_q, mu_p, sig_p):
     return kl.sum(dim=-1)
 
 def loader_to_numpy(loader, device='cpu'):
-    xs, ys, colors, ages, regions = [], [], [], [], []
+    xs, ys, attr1s, attr2s, attr3s, attr4s = [], [], [], [], [], []
+    attr5s, attr6s, attr7s = [], [], []
+    has_attr4 = False
+    has_nursery_attrs = False
     for batch in loader:
-        # Handle both 5-element and 6-element batches
+        # Handle 5-element, 6-element, 7-element, and 9-element (nursery) batches
         if len(batch) == 5:
-            x, y, color, age, region = batch
+            x, y, a1, a2, a3 = batch
+            a4 = torch.zeros_like(y)
         elif len(batch) == 6:
-            x, y, group1, group2, _attr1, attr2 = batch
-            color = group1
-            age = group2
-            region = attr2
+            x, y, a1, a2, _, a3 = batch
+            a4 = torch.zeros_like(y)
+        elif len(batch) == 7:
+            x, y, a1, a2, a3, a4, _ = batch
+            has_attr4 = True
+        elif len(batch) == 9:
+            x, y, a1, a2, a3, a4, a5, a6, a7 = batch
+            has_attr4 = True
+            has_nursery_attrs = True
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}")
             
         xs.append(x.cpu().numpy())
         ys.append(y.cpu().numpy())
-        colors.append(color.cpu().numpy())
-        ages.append(age.cpu().numpy())
-        regions.append(region.cpu().numpy())
-    return {
+        attr1s.append(a1.cpu().numpy())
+        attr2s.append(a2.cpu().numpy())
+        attr3s.append(a3.cpu().numpy())
+        attr4s.append(a4.cpu().numpy())
+        if has_nursery_attrs:
+            attr5s.append(a5.cpu().numpy())
+            attr6s.append(a6.cpu().numpy())
+            attr7s.append(a7.cpu().numpy())
+    
+    out = {
         'x': np.concatenate(xs, axis=0),
         'y': np.concatenate(ys, axis=0),
-        'color': np.concatenate(colors, axis=0),
-        'age': np.concatenate(ages, axis=0),
-        'region': np.concatenate(regions, axis=0),
+        'color': np.concatenate(attr1s, axis=0),
+        'age': np.concatenate(attr2s, axis=0),
+        'region': np.concatenate(attr3s, axis=0),
     }
+    if has_attr4:
+        out['diag'] = np.concatenate(attr4s, axis=0)
+    if has_nursery_attrs:
+        out['attr5'] = np.concatenate(attr5s, axis=0)
+        out['attr6'] = np.concatenate(attr6s, axis=0)
+        out['attr7'] = np.concatenate(attr7s, axis=0)
+    return out
 
 
 # =========================
@@ -46,17 +68,26 @@ def loader_to_numpy(loader, device='cpu'):
 def extract_all(backbone, loader, device="cpu"):
     backbone.eval()
     feats_all, probs_all, scores_all = [], [], []
-    y_all, color_all, age_all, region_all = [], [], [], []
+    y_all, attr1_all, attr2_all, attr3_all, attr4_all = [], [], [], [], []
+    attr5_all, attr6_all, attr7_all = [], [], []
+    has_attr4 = False
+    has_nursery_attrs = False
 
     for batch in loader:
-        # Handle both 5-element and 6-element batches
+        # Handle 5-element, 6-element, 7-element, and 9-element batches
         if len(batch) == 5:
-            x, y, color, age, region = batch
+            x, y, a1, a2, a3 = batch
+            a4 = torch.zeros_like(y)
         elif len(batch) == 6:
-            x, y, group1, group2, _attr1, attr2 = batch
-            color = group1
-            age = group2
-            region = attr2
+            x, y, a1, a2, _, a3 = batch
+            a4 = torch.zeros_like(y)
+        elif len(batch) == 7:
+            x, y, a1, a2, a3, a4, _ = batch
+            has_attr4 = True
+        elif len(batch) == 9:
+            x, y, a1, a2, a3, a4, a5, a6, a7 = batch
+            has_attr4 = True
+            has_nursery_attrs = True
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}")
         
@@ -69,19 +100,31 @@ def extract_all(backbone, loader, device="cpu"):
         probs_all.append(probs.numpy())
         scores_all.append(scores.numpy())
         y_all.append(y.numpy())
-        color_all.append(color.numpy())
-        age_all.append(age.numpy())
-        region_all.append(region.numpy())
+        attr1_all.append(a1.numpy())
+        attr2_all.append(a2.numpy())
+        attr3_all.append(a3.numpy())
+        attr4_all.append(a4.numpy())
+        if has_nursery_attrs:
+            attr5_all.append(a5.numpy())
+            attr6_all.append(a6.numpy())
+            attr7_all.append(a7.numpy())
 
-    return {
+    out = {
         "feats": np.concatenate(feats_all),
         "probs": np.concatenate(probs_all),
         "scores": np.concatenate(scores_all),
         "y": np.concatenate(y_all),
-        "color": np.concatenate(color_all),
-        "age": np.concatenate(age_all),
-        "region": np.concatenate(region_all),
+        "color": np.concatenate(attr1_all),
+        "age": np.concatenate(attr2_all),
+        "region": np.concatenate(attr3_all),
     }
+    if has_attr4:
+        out["diag"] = np.concatenate(attr4_all)
+    if has_nursery_attrs:
+        out["attr5"] = np.concatenate(attr5_all)
+        out["attr6"] = np.concatenate(attr6_all)
+        out["attr7"] = np.concatenate(attr7_all)
+    return out
 
 
 def conformal_quantile(scores, alpha):
