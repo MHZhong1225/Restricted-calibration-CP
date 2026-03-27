@@ -52,10 +52,16 @@ def evaluate_prediction_sets(pred_sets, y_true, attr1, attr2, attr3, attr4=None,
         "attr3_set_sizes": attr3_sizes,
         "attr4_coverages": attr4_covs,
         "attr4_set_sizes": attr4_sizes,
-        "blue_coverage": float(cover[attr1 == 1].mean()) if 1 in attr1 else float("nan"),
-        "blue_avg_set_size": float(sizes[attr1 == 1].mean()) if 1 in attr1 else float("nan"),
     }
     
+    # Only calculate blue metrics if 1 exists in attr1 and there are exactly 2 unique values (like color)
+    if 1 in attr1 and len(np.unique(attr1)) <= 2:
+        out["blue_coverage"] = float(cover[attr1 == 1].mean())
+        out["blue_avg_set_size"] = float(sizes[attr1 == 1].mean())
+    else:
+        out["blue_coverage"] = float("nan")
+        out["blue_avg_set_size"] = float("nan")
+
     if attr5 is not None:
         out.update({
             "attr5_coverages": attr5_covs, "attr5_set_sizes": attr5_sizes,
@@ -114,9 +120,17 @@ def evaluate_prediction_sets(pred_sets, y_true, attr1, attr2, attr3, attr4=None,
             out["covgap_attr6"] = cov_gap_from_coverages(attr6_covs)
             out["covgap_attr7"] = cov_gap_from_coverages(attr7_covs)
             
-        # Overall attr1 fairness gap
-        if 0 in attr1_covs and 1 in attr1_covs:
-            out["fairgap_attr1"] = abs(attr1_covs[0] - attr1_covs[1])
+    # Overall attr1 fairness gap (max difference across all pairs if >1 groups)
+    if len(attr1_covs) >= 2:
+        vals = list(attr1_covs.values())
+        out["fairgap_attr1"] = float(np.max(vals) - np.min(vals))
+    else:
+        out["fairgap_attr1"] = float("nan")
+
+        # Overall attr1 fairness gap (max difference across all pairs if >1 groups)
+        if len(attr1_covs) >= 2:
+            vals = list(attr1_covs.values())
+            out["fairgap_attr1"] = float(np.max(vals) - np.min(vals))
         else:
             out["fairgap_attr1"] = float("nan")
 
@@ -312,11 +326,9 @@ def evaluate_sg_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", n_
         labels = [y for y in range(c) if float(v_all[i, y]) <= qv]
         pred_sets.append(labels)
         
-    # 为 BACH 添加难度分箱 (difficulty binning) 到 attr2
-    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:  # 假设只有占位符时才覆盖
-        # 按照预测目标的非一致性（1 - p(y)）作为难度
+    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:  
         true_scores = 1.0 - probs[np.arange(n), data["y"]]
-        # 分为 3 箱：简单、中等、困难
+        # simple mid hard
         bins = np.quantile(true_scores, [0.33, 0.67])
         difficulty_bins = np.digitize(true_scores, bins)
         data["age"] = difficulty_bins

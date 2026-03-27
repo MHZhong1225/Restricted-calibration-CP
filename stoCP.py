@@ -1,11 +1,13 @@
 import argparse
+import sys
 import os
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
 import pandas as pd
 import torch
 import torch.nn as nn
-from torchvision import models
+import wandb
+
 from tqdm import tqdm
 
 from pathlib import Path
@@ -21,32 +23,26 @@ from SelectiveCI_fairness.sgcp_flow import Backbone
 
 def _create_backbone(backbone_name: str, pretrained: bool = True) -> tuple[nn.Module, int]:
     """
-    Load backbone and remove classifier head.
+    Create image backbone (e.g., ResNet18) and replace classification head with Identity.
     Return feature extractor and feature dimension.
     """
+    from torchvision import models
     if backbone_name == 'resnet18':
         print("Loading pretrained ResNet-18 backbone.")
         backbone = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None)
         num_ftrs = backbone.fc.in_features
         backbone.fc = nn.Identity()
-    elif backbone_name == 'resnet34':
-        print("Loading pretrained ResNet-34 backbone.")
-        backbone = models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None)
-        num_ftrs = backbone.fc.in_features
-        backbone.fc = nn.Identity()
     elif backbone_name == 'resnet50':
-        print("Loading pretrained ResNet-50 backbone.")
-        backbone = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2 if pretrained else None)
+        backbone = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1 if pretrained else None)
         num_ftrs = backbone.fc.in_features
         backbone.fc = nn.Identity()
     elif backbone_name == 'efficientnet_b0':
-        print("Loading pretrained EfficientNet-B0 backbone.")
         backbone = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None)
         num_ftrs = backbone.classifier[1].in_features
-        backbone.classifier = nn.Identity()
+        backbone.classifier[1] = nn.Identity()
     else:
-        raise ValueError(f"Backbone '{backbone_name}' is not supported.")
-
+        raise ValueError(f"Unsupported backbone: {backbone_name}")
+        
     return backbone, num_ftrs
 
 def _round_metric_columns(df: pd.DataFrame, decimals: Optional[int] = None) -> pd.DataFrame:
@@ -67,7 +63,7 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
             "n_tra_cal": 0, "test_samples": 500, "color_blue_prob": 0.10,
             "group1_prob_1": 0.5, "group2_prob_1": 0.5, "delta1": 0.5, "delta0": 0.2,
             "n_nonsensitive": 6, "batch_size": 128, "dataset_mode": "single_sensitive",
-            "mimic_preprocessed_path": "", "mimic_train_frac": 0.6, "mimic_cal_frac": 0.2,
+            "mimic_preprocessed_path": "data/mimic_iv_processed.csv", "mimic_train_frac": 0.6, "mimic_cal_frac": 0.2,
             "mimic_label_col": "label", "mimic_sensitive_col": "minority", "mimic_age_col": "age",
             "mimic_region_col": "", "mimic_feature_cols": "", "mimic_id_cols": "SUBJECT_ID,HADM_ID",
         },
@@ -93,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cuda", type=str, default="0")
     parser.add_argument("--outdir", type=str, default="results_sgcp_mimic")
     
-    parser.add_argument("--dataset-mode", type=str, default="single_sensitive",
+    parser.add_argument("--dataset-mode", type=str, default=None,
                         choices=["single_sensitive", "two_sensitive", "mimic", "adult", "nursery", "bach"])
     parser.add_argument("--n_tra_cal", type=int, default=200)
     parser.add_argument("--test-samples", type=int, default=500)
@@ -119,15 +115,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--grid-json", type=str, default="grid_sgcp.json")
     parser.add_argument("--sweep-name", type=str, default="default_sweep")
+
+    parser.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging")
+    parser.add_argument("--wandb-project", type=str, default="SGCP")
+    parser.add_argument("--wandb-name", type=str, default=None)
+
     return parser
 
 def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
     cfg = default_cfg()
     cfg["experiment"].update({
-        "alpha": args.alpha, "hard_cluster_seed": getattr(args, "hard_cluster_seed", args.seed),
-        "outdir": args.outdir + f"_{args.alpha}", "methods": args.methods,
-        "seed": args.seed, "cuda": args.cuda, "make_intro_figure": bool(getattr(args, "make_intro_figure", False)),
-    })
+            "alpha": args.alpha, 
+            "outdir": args.outdir + f"_{args.alpha}", 
+            "methods": args.methods,
+            "seed": args.seed, 
+            "cuda": args.cuda, 
+            "use_wandb": getattr(args, "use_wandb", False),
+            "wandb_project": getattr(args, "wandb_project", "SGCP") + f"_{args.alpha}",
+        })
     cfg["dataset"].update({
         "n_tra_cal": args.n_tra_cal, "test_samples": args.test_samples, "batch_size": args.batch_size,
         "dataset_mode": args.dataset_mode, "image_backbone": getattr(args, "image_backbone", "resnet18"),
@@ -144,7 +149,6 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
 def save_run_results(
     results,
     cfg: Dict[str, Dict[str, Any]],
-    dataset_name,
     outdir="results",
 ):
     Path(outdir).mkdir(parents=True, exist_ok=True)
@@ -171,12 +175,37 @@ def save_run_results(
         return df.loc[:, cols]
 
     base_info = {}
-    base_info.update(flatten_config_dict("experiment", cfg["experiment"]))
-    base_info.update(flatten_config_dict("dataset", cfg["dataset"]))
-    base_info.update(flatten_config_dict("model", cfg["model"]))
+    
+    # Selectively save important experiment configs
+    exp_cfg = cfg["experiment"]
+    base_info["experiment.seed"] = exp_cfg.get("seed")
+    base_info["experiment.alpha"] = exp_cfg.get("alpha")
+    
+    # Dataset configs
+    ds_cfg = cfg["dataset"]
+    dataset_mode = ds_cfg.get("dataset_mode")
+    base_info["dataset.dataset_mode"] = dataset_mode
+    base_info["dataset.batch_size"] = ds_cfg.get("batch_size")
+    if dataset_mode in ["single_sensitive", "two_sensitive", "mimic", "adult", "nursery"]:
+        base_info["dataset.n_tra_cal"] = ds_cfg.get("n_tra_cal")
+        base_info["dataset.test_samples"] = ds_cfg.get("test_samples")
+    if dataset_mode == "single_sensitive":
+        base_info["dataset.color_blue_prob"] = ds_cfg.get("color_blue_prob")
+    if dataset_mode == "two_sensitive":
+        base_info["dataset.group1_prob_1"] = ds_cfg.get("group1_prob_1")
+        base_info["dataset.group2_prob_1"] = ds_cfg.get("group2_prob_1")
+    if dataset_mode == "bach":
+        base_info["dataset.image_backbone"] = ds_cfg.get("image_backbone")
+
+    # Model configs
+    model_cfg = cfg["model"]
+    base_info["model.num_classes"] = model_cfg.get("num_classes")
+    base_info["model.num_prototypes"] = model_cfg.get("num_prototypes")
+    base_info["model.latent_dim"] = model_cfg.get("latent_dim")
+
+    # Training configs
     base_info.update(flatten_config_dict("backbone_train", cfg["backbone_train"]))
     base_info.update(flatten_config_dict("sgcp_train", cfg["sgcp_train"]))
-    base_info["dataset_name"] = dataset_name
 
     rows = []
     for method_name, metrics in results.items():
@@ -215,48 +244,36 @@ def save_run_results(
     return run_df, master_csv_path
 
 
-def run_name_for_cfg(cfg: Dict[str, Dict[str, Any]], dataset_name: str) -> str:
-    return (
-        f"{dataset_name}"
-        f"_seed{cfg['experiment']['seed']}"
-        f"_trca{cfg['dataset']['n_tra_cal']}"
-        f"_te{cfg['dataset']['test_samples']}"
-        f"_bblr{cfg['backbone_train']['lr']}"
-        f"_bbep{cfg['backbone_train']['epochs']}"
-        f"_sgcplr{cfg['sgcp_train']['lr']}"
-        f"_sgcpep{cfg['sgcp_train']['epochs']}"
-        f"_kl{cfg['sgcp_train']['beta_kl']}"
-        f"_bal{cfg['sgcp_train']['lambda_balance']}"
-        f"_nll{cfg['sgcp_train']['lambda_score']}"
-        f"_lats{cfg['sgcp_train']['train_latent_samples']}"
-        f"_evalL{cfg['sgcp_train']['eval_latent_samples']}"
-        f"_bins{cfg['sgcp_train']['num_score_bins']}"
-        f"_edges{cfg['sgcp_train']['score_bin_edges']}"
-        f"_smooth{cfg['sgcp_train']['hist_smoothing']}"
-        f"_proto{cfg['model']['num_prototypes']}"
-        f"_latent{cfg['model']['latent_dim']}"
-    )
+def run_name_for_cfg(cfg: Dict[str, Dict[str, Any]]) -> str:
+    dataset_name = cfg['dataset'].get('dataset_mode', 'unknown')
+    seed = cfg['experiment']['seed']
+    proto = cfg['model']['num_prototypes']
+    lr = cfg['sgcp_train']['lr']
+    
+    # eg.: bach_s42_proto8_lr0.001
+    return f"{dataset_name}_s{seed}_proto{proto}_lr{lr}"
 
 
-def dataset_name_for_cfg(cfg: Dict[str, Dict[str, Any]]) -> str:
-    if cfg["dataset"]["dataset_mode"] == "mimic":
-        return "mimic"
-    if cfg["dataset"]["dataset_mode"] == "adult":
-        return "adult"
-    if cfg["dataset"]["dataset_mode"] == "nursery":
-        return "nursery"
-    return "two_sensitive" if cfg["dataset"]["dataset_mode"] == "two_sensitive" else "single_sensitive"
-
-
-def run_csv_path_for_cfg(cfg: Dict[str, Dict[str, Any]], dataset_name: str) -> str:
-    return os.path.join(cfg["experiment"]["outdir"], f"{run_name_for_cfg(cfg, dataset_name)}.csv")
-
+def get_cached_backbone_path(cfg: Dict[str, Dict[str, Any]]) -> str:
+    """Get path to cached backbone model."""
+    outdir = os.path.join(cfg["experiment"]["outdir"], "checkpoints")
+    os.makedirs(outdir, exist_ok=True) 
+    
+    dataset_mode = cfg["dataset"]["dataset_mode"]
+    if dataset_mode == "bach": # 图像数据集
+        bb_name = cfg["dataset"].get("image_backbone", "resnet18")
+    else:
+        bb_name = "mlp"
+        
+    lr = cfg["backbone_train"]["lr"]
+    batch_size = cfg["dataset"]["batch_size"]
+    return os.path.join(outdir, f"{dataset_mode}_{bb_name}_lr{lr}_bs{batch_size}.pth")
 
 def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any], seed: int):
     
     if data_cfg["dataset_mode"] == "mimic":
         mimic_cfg = SimpleNamespace(
-            mimic_preprocessed_path="dataset/mimic_admissions_processed.csv",
+            mimic_preprocessed_path="dataset/mimic_iv_processed.csv",
             n_use=data_cfg.get("n_tra_cal", 0),
             train_frac=data_cfg.get("mimic_train_frac", 0.6),
             cal_frac=data_cfg.get("mimic_cal_frac", 0.2),
@@ -270,7 +287,7 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
             seed=seed,
         )
         train_loader, cal_loader, test_loader, meta = build_dataloaders_mimic(mimic_cfg)
-        return train_loader, cal_loader, test_loader, "mimic", meta
+        return train_loader, cal_loader, test_loader, meta
 
     if data_cfg["dataset_mode"] == "adult":
         adult_cfg = SimpleNamespace(
@@ -282,7 +299,7 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
             seed=seed,
         )
         train_loader, cal_loader, test_loader, meta = build_dataloaders_adult(adult_cfg)
-        return train_loader, cal_loader, test_loader, "adult", meta
+        return train_loader, cal_loader, test_loader, meta
 
     if data_cfg["dataset_mode"] == "nursery":
         nursery_cfg = SimpleNamespace(
@@ -294,7 +311,17 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
             seed=seed,
         )
         train_loader, cal_loader, test_loader, meta = build_dataloaders_nursery(nursery_cfg)
-        return train_loader, cal_loader, test_loader, "nursery", meta
+        return train_loader, cal_loader, test_loader, meta
+
+    if data_cfg["dataset_mode"] == "bach":
+        from dataset.image_data import build_dataloaders_bach
+        bach_cfg = SimpleNamespace(
+            image_data_dir="/home/ubuntu/zmh/BrCPT/datasets/bach",
+            batch_size=data_cfg["batch_size"],
+            seed=seed,
+        )
+        train_loader, cal_loader, test_loader, meta = build_dataloaders_bach(bach_cfg)
+        return train_loader, cal_loader, test_loader, meta
 
     if data_cfg["dataset_mode"] == "two_sensitive":
         syn_cfg = SimpleNamespace(
@@ -311,7 +338,7 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
         )
         train_loader, cal_loader, test_loader = build_dataloaders_2(syn_cfg)
         # input_dim = 4 + data_cfg["n_nonsensitive"]
-        dataset_name = "two_sensitive"
+
     else:
         syn_cfg = SimpleNamespace(
             K=model_cfg["num_classes"],
@@ -326,19 +353,19 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
         )
         train_loader, cal_loader, test_loader = build_dataloaders_1(syn_cfg)
         # input_dim = 3 + data_cfg["n_nonsensitive"]
-        dataset_name = "single_sensitive"
 
-    return train_loader, cal_loader, test_loader, dataset_name, syn_cfg
+
+    return train_loader, cal_loader, test_loader, syn_cfg
 
 
 # =========================
 # Core run
 # =========================
 
-def run_one_experiment(
+def run_experiment(
     cfg: Dict[str, Dict[str, Any]],
+    exp_cfg: SimpleNamespace,
 ):
-    exp_cfg = SimpleNamespace(**cfg["experiment"])
     model_cfg = SimpleNamespace(**cfg["model"])
     sgcp_cfg = SimpleNamespace(**cfg["sgcp_train"])
 
@@ -354,14 +381,21 @@ def run_one_experiment(
     )
     print(f"[runtime] device: {device}\n")
 
-
-    train_loader, cal_loader, test_loader, dataset_name, syn_cfg = build_dataset_and_loaders(
+    if getattr(exp_cfg, "use_wandb", False):
+        wandb.init(
+            project=exp_cfg.wandb_project,
+            name=run_name_for_cfg(cfg), 
+            config=cfg,                 # 自动记录所有超参数
+            reinit=True                 # 允许在同一个脚本中运行多个 sweep 实验
+        )
+        
+    train_loader, cal_loader, test_loader, syn_cfg = build_dataset_and_loaders(
         data_cfg=cfg["dataset"],
         model_cfg=cfg["model"],
         seed=exp_cfg.seed,
     )
 
-    print(f"[runtime] dataset_name: {dataset_name}")
+    print(f"[runtime] dataset_mode: {cfg['dataset']['dataset_mode']}")
     print(f"[runtime] dataset_cfg: {vars(syn_cfg)}\n")
 
     # Update num_classes if meta provides it
@@ -383,6 +417,7 @@ def run_one_experiment(
                 super().__init__()
                 self.extractor = extractor
                 self.classifier = nn.Linear(feat_dim, num_classes)
+                self.feature_dim = feat_dim
             def forward(self, x):
                 feats = self.extractor(x)
                 logits = self.classifier(feats)
@@ -396,13 +431,21 @@ def run_one_experiment(
             num_classes=model_cfg.num_classes,
         )
 
-    backbone = train_backbone(
-        backbone,
-        train_loader,
-        epochs=cfg["backbone_train"]["epochs"],
-        lr=cfg["backbone_train"]["lr"],
-        device=device,
-    )
+    cached_backbone_path = get_cached_backbone_path(cfg)
+    if os.path.exists(cached_backbone_path):
+        print(f"[runtime] Loading cached backbone from {cached_backbone_path}")
+        backbone.to(device)
+        backbone.load_state_dict(torch.load(cached_backbone_path, map_location=device))
+    else:
+        print(f"[runtime] Training backbone and caching to {cached_backbone_path}")
+        backbone = train_backbone(
+            backbone,
+            train_loader,
+            epochs=cfg["backbone_train"]["epochs"],
+            lr=cfg["backbone_train"]["lr"],
+            device=device,
+        )
+        torch.save(backbone.state_dict(), cached_backbone_path)
 
 
     metrics, sg_assign, _sg_cp = evaluate_sgcp(
@@ -415,6 +458,8 @@ def run_one_experiment(
         sgcp_cfg=sgcp_cfg,
         device=device,
     )
+
+
 
     if cfg["dataset"]["dataset_mode"] == "mimic" and cfg["experiment"].get("methods") == "sgcp" and cfg["experiment"].get("make_intro_figure", False):
         from figures.intro_borrowing_mimic.make_intro_borrowing_mimic_figure import make_intro_borrowing_mimic_figure
@@ -431,13 +476,19 @@ def run_one_experiment(
         )
 
     for title, metrics0 in metrics.items():
-        print(f"\n=== {title} ===")
-        print(metrics0)
+            print(f"\n=== {title} ===")
+            print(metrics0)
+            
+            if getattr(exp_cfg, "use_wandb", False):
+                wandb_log_dict = {f"{title}/{k}": v for k, v in metrics0.items() if isinstance(v, (int, float))}
+                wandb.log(wandb_log_dict)
+
+    if getattr(exp_cfg, "use_wandb", False):
+            wandb.finish()
 
     run_df, master_csv_path = save_run_results(
         results=metrics,
         cfg=cfg,
-        dataset_name=dataset_name,
         outdir=exp_cfg.outdir,
     )
 
@@ -447,7 +498,6 @@ def run_one_experiment(
         # "json_path": json_path,
         # "run_csv_path": run_csv_path,
         "master_csv_path": master_csv_path,
-        "dataset_name": dataset_name,
     }
 
 
@@ -462,13 +512,6 @@ def main():
     # Load base grid from file if provided, else use defaults
     grid = load_grid_json(args.grid_json) if args.grid_json else {}
 
-    # Override grid with specific command line arguments
-    if args.dataset_mode: grid["dataset.dataset_mode"] = [args.dataset_mode]
-    if args.n_tra_cal: grid["dataset.n_tra_cal"] = [args.n_tra_cal]
-    if args.test_samples: grid["dataset.test_samples"] = [args.test_samples]
-    if args.batch_size: grid["dataset.batch_size"] = [args.batch_size]
-    
-    if args.seeds: grid["seeds"] = args.seeds
 
     # Expand into individual run configs
     expanded = expand_grid(grid)
@@ -483,12 +526,9 @@ def main():
 
         for s in seeds_to_run:
             run_cfg["experiment"]["seed"] = s
-            try:
-                run_one_experiment(cfg=run_cfg)
-            except Exception as e:
-                print(f"[Error] Failed on run {run_idx}, seed {s}: {e}")
-                import traceback
-                traceback.print_exc()
+            exp_cfg = SimpleNamespace(**run_cfg["experiment"])
+            out = run_experiment(cfg=run_cfg, exp_cfg=exp_cfg)
+
 
 if __name__ == "__main__":
     main()

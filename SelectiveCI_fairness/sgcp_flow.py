@@ -128,10 +128,11 @@ class StochasticAssignment(nn.Module):
         dist2 = ((z.unsqueeze(2) - self.prototypes.unsqueeze(0).unsqueeze(0)) ** 2).sum(dim=-1)
         return F.softmax(-dist2 / self.temperature, dim=-1)
 
-    def forward(self, x, n_latent_samples=8):
-        with torch.no_grad():
-            logits, h = self.backbone(x)
-            probs = F.softmax(logits, dim=-1)
+    def forward(self, x=None, h=None, probs=None, n_latent_samples=8):
+        if h is None or probs is None:
+            with torch.no_grad():
+                logits, h = self.backbone(x)
+                probs = F.softmax(logits, dim=-1)
 
         post_mu, post_sig = self.posterior_net(h)
         prior_mu, prior_sig = self.prior_net(probs.detach())
@@ -152,4 +153,3 @@ class StochasticAssignment(nn.Module):
             "avg_weights": avg_weights,
             "difficulty": difficulty,
         }
-

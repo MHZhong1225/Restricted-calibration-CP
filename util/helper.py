@@ -14,7 +14,6 @@ from dataset.synthetic import build_dataloaders_1, build_dataloaders_2
 from dataset.mimic import build_dataloaders_mimic
 from dataset.adult import build_dataloaders_adult
 from dataset.nursery import build_dataloaders_nursery
-from dataset.image_data import build_dataloaders_bach
 from typing import Dict, Any, Tuple
 
 
@@ -39,16 +38,42 @@ def build_dataset_and_loaders(
         model_cfg["feature_dim"] = meta.feature_dim
         return tr_loader, ca_loader, te_loader, "nursery", meta
     elif d_cfg.dataset_mode == "bach":
+        from dataset.image_data import build_dataloaders_bach
         tr_loader, ca_loader, te_loader, meta = build_dataloaders_bach(d_cfg)
         return tr_loader, ca_loader, te_loader, "bach", meta
-    elif d_cfg.dataset_mode == "single_sensitive":
-        tr_loader, ca_loader, te_loader, meta = build_dataloaders_1(d_cfg)
-        model_cfg["feature_dim"] = meta.feature_dim
-        return tr_loader, ca_loader, te_loader, "synthetic_1", meta
     elif d_cfg.dataset_mode == "two_sensitive":
-        tr_loader, ca_loader, te_loader, meta = build_dataloaders_2(d_cfg)
-        model_cfg["feature_dim"] = meta.feature_dim
-        return tr_loader, ca_loader, te_loader, "synthetic_2", meta
+        k = int(model_cfg.get("num_classes", 6))
+        syn_cfg = SimpleNamespace(
+            K=k,
+            delta1=d_cfg.delta1,
+            delta0=d_cfg.delta0,
+            group1_prob_1=d_cfg.group1_prob_1,
+            group2_prob_1=d_cfg.group2_prob_1,
+            n_nonsensitive=d_cfg.n_nonsensitive,
+            n_samples=d_cfg.n_tra_cal,
+            test_samples=d_cfg.test_samples,
+            batch_size=d_cfg.batch_size,
+            seed=seed,
+        )
+        tr_loader, ca_loader, te_loader = build_dataloaders_2(syn_cfg)
+        model_cfg["feature_dim"] = next(iter(tr_loader))[0].shape[1]
+        return tr_loader, ca_loader, te_loader, "two_sensitive", syn_cfg
+    elif d_cfg.dataset_mode == "single_sensitive":
+        k = int(model_cfg.get("num_classes", 6))
+        syn_cfg = SimpleNamespace(
+            K=k,
+            delta1=d_cfg.delta1,
+            delta0=d_cfg.delta0,
+            group_prob_1=d_cfg.color_blue_prob,
+            n_nonsensitive=d_cfg.n_nonsensitive,
+            n_samples=d_cfg.n_tra_cal,
+            test_samples=d_cfg.test_samples,
+            batch_size=d_cfg.batch_size,
+            seed=seed,
+        )
+        tr_loader, ca_loader, te_loader = build_dataloaders_1(syn_cfg)
+        model_cfg["feature_dim"] = next(iter(tr_loader))[0].shape[1]
+        return tr_loader, ca_loader, te_loader, "single_sensitive", syn_cfg
     else:
         raise ValueError(f"Unknown dataset_mode: {d_cfg.dataset_mode}")
 

@@ -18,9 +18,13 @@ def loader_to_numpy(loader, device='cpu'):
     for batch in loader:
         # Handle 5-element, 6-element, 7-element, and 9-element (nursery) batches
         if len(batch) == 5:
+            # BACH / Single Sensitive / Synthetic
             x, y, a1, a2, a3 = batch
             a4 = torch.zeros_like(y)
         elif len(batch) == 6:
+            # Check if this is synthetic data (which uses a1, a2 as groups, and a3 as something else)
+            # or some other format. In two_sensitive, batch is (x, y, a1, a2, a_idx1, a_idx2)
+            # Let's preserve the original behavior for two_sensitive
             x, y, a1, a2, _, a3 = batch
             a4 = torch.zeros_like(y)
         elif len(batch) == 7:
@@ -76,6 +80,7 @@ def extract_all(backbone, loader, device="cpu"):
     for batch in loader:
         # Handle 5-element, 6-element, 7-element, and 9-element batches
         if len(batch) == 5:
+            # BACH / Single Sensitive / Synthetic
             x, y, a1, a2, a3 = batch
             a4 = torch.zeros_like(y)
         elif len(batch) == 6:
