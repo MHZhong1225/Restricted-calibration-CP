@@ -22,10 +22,6 @@ from SelectiveCI_fairness.sgcp_flow import Backbone
 
 
 def _create_backbone(backbone_name: str, pretrained: bool = True) -> tuple[nn.Module, int]:
-    """
-    Create image backbone (e.g., ResNet18) and replace classification head with Identity.
-    Return feature extractor and feature dimension.
-    """
     from torchvision import models
     if backbone_name == 'resnet18':
         print("Loading pretrained ResNet-18 backbone.")
@@ -63,7 +59,7 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
             "n_tra_cal": 0, "test_samples": 500, "color_blue_prob": 0.10,
             "group1_prob_1": 0.5, "group2_prob_1": 0.5, "delta1": 0.5, "delta0": 0.2,
             "n_nonsensitive": 6, "batch_size": 128, "dataset_mode": "single_sensitive",
-            "mimic_preprocessed_path": "data/mimic_iv_processed.csv", "mimic_train_frac": 0.6, "mimic_cal_frac": 0.2,
+            "mimic_preprocessed_path": "dataset/mimic_iv_processed.csv", "mimic_train_frac": 0.6, "mimic_cal_frac": 0.2,
             "mimic_label_col": "label", "mimic_sensitive_col": "minority", "mimic_age_col": "age",
             "mimic_region_col": "", "mimic_feature_cols": "", "mimic_id_cols": "SUBJECT_ID,HADM_ID",
         },
@@ -91,6 +87,15 @@ def build_parser() -> argparse.ArgumentParser:
     
     parser.add_argument("--dataset-mode", type=str, default=None,
                         choices=["single_sensitive", "two_sensitive", "mimic", "adult", "nursery", "bach"])
+    
+    parser.add_argument("--mimic-label-col", type=str, default="label", 
+                        help="Task label: 'label' (Mortality) or 'icu_delay_class' (Resource delay)")
+    parser.add_argument("--mimic-feature-cols", type=str, default="age,gender_m,ins_private,ins_medicare,ins_medicaid,adm_emergency,adm_elective,adm_urgent,marital_married,marital_single,icu_los,num_diagnoses", 
+                        help="Comma-separated list of feature columns for MIMIC")
+    parser.add_argument("--mimic-sensitive-cols", type=str, default="minority,gender_m,public_insurance",
+                        help="Comma-separated sensitive attributes (e.g., 'minority,gender_m,public_insurance')")
+
+
     parser.add_argument("--n_tra_cal", type=int, default=200)
     parser.add_argument("--test-samples", type=int, default=500)
     parser.add_argument("--batch-size", type=int, default=128)
@@ -99,21 +104,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-backbone", type=str, default="resnet18", 
                         choices=["resnet18", "resnet34", "resnet50", "efficientnet_b0"])
 
-    parser.add_argument("--hidden-dim", type=int, default=128)
+    parser.add_argument("--hidden-dim", type=int, default=32)
     parser.add_argument("--latent-dim", type=int, default=8)
     parser.add_argument("--num-prototypes", type=int, default=8)
     parser.add_argument("--num-classes", type=int, default=6)
     
     parser.add_argument("--backbone-epochs", type=int, default=200)
-    parser.add_argument("--backbone-lr", type=float, default=1e-3)
+    parser.add_argument("--backbone-lr", type=float, default=1e-4)
     
     parser.add_argument("--soft-epochs", type=int, default=100)
     parser.add_argument("--soft-lr", type=float, default=1e-2)
     
-    parser.add_argument("--sgcp-epochs", type=int, default=200)
+    parser.add_argument("--sgcp-epochs", type=int, default=300)
     parser.add_argument("--sgcp-lr", type=float, default=1e-3)
 
-    parser.add_argument("--grid-json", type=str, default="grid_sgcp.json")
+    parser.add_argument("--grid-json", type=str, default=None)
     parser.add_argument("--sweep-name", type=str, default="default_sweep")
 
     parser.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging")
@@ -133,18 +138,34 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
             "use_wandb": getattr(args, "use_wandb", False),
             "wandb_project": getattr(args, "wandb_project", "SGCP") + f"_{args.alpha}",
         })
+    
+    # 通用数据集参数
     cfg["dataset"].update({
-        "n_tra_cal": args.n_tra_cal, "test_samples": args.test_samples, "batch_size": args.batch_size,
-        "dataset_mode": args.dataset_mode, "image_backbone": getattr(args, "image_backbone", "resnet18"),
-    })
+            "n_tra_cal": args.n_tra_cal, 
+            "test_samples": args.test_samples, 
+            "batch_size": args.batch_size,
+            "dataset_mode": args.dataset_mode, 
+            "image_backbone": getattr(args, "image_backbone", "resnet18"),
+        })
     cfg["model"].update({
         "hidden_dim": args.hidden_dim, "latent_dim": args.latent_dim,
         "num_prototypes": args.num_prototypes, "num_classes": args.num_classes,
     })
+    # 
+    if args.dataset_mode == "mimic":
+        cfg["dataset"].update({
+            "mimic_label_col": args.mimic_label_col,
+            "mimic_sensitive_cols": args.mimic_sensitive_cols,
+            "mimic_feature_cols": args.mimic_feature_cols if args.mimic_label_col == "label" else "age,gender_m,ins_private,ins_medicare,ins_medicaid,adm_emergency,adm_elective,adm_urgent,marital_married,marital_single,num_diagnoses",
+        })
+        
+        cfg["model"].update({
+            "num_classes": 2 if args.mimic_label_col == "label" else 3,
+        })
+
     cfg["backbone_train"].update({"epochs": args.backbone_epochs, "lr": args.backbone_lr})
     cfg["sgcp_train"].update({"epochs": args.sgcp_epochs, "lr": args.sgcp_lr})
     return cfg
-
 
 def save_run_results(
     results,
@@ -176,12 +197,10 @@ def save_run_results(
 
     base_info = {}
     
-    # Selectively save important experiment configs
     exp_cfg = cfg["experiment"]
     base_info["experiment.seed"] = exp_cfg.get("seed")
     base_info["experiment.alpha"] = exp_cfg.get("alpha")
     
-    # Dataset configs
     ds_cfg = cfg["dataset"]
     dataset_mode = ds_cfg.get("dataset_mode")
     base_info["dataset.dataset_mode"] = dataset_mode
@@ -189,6 +208,11 @@ def save_run_results(
     if dataset_mode in ["single_sensitive", "two_sensitive", "mimic", "adult", "nursery"]:
         base_info["dataset.n_tra_cal"] = ds_cfg.get("n_tra_cal")
         base_info["dataset.test_samples"] = ds_cfg.get("test_samples")
+    
+    if dataset_mode == "mimic":
+        base_info["dataset.mimic_label"] = ds_cfg.get("mimic_label_col")
+        base_info["dataset.mimic_sensitive"] = ds_cfg.get("mimic_sensitive_cols")
+        
     if dataset_mode == "single_sensitive":
         base_info["dataset.color_blue_prob"] = ds_cfg.get("color_blue_prob")
     if dataset_mode == "two_sensitive":
@@ -197,13 +221,11 @@ def save_run_results(
     if dataset_mode == "bach":
         base_info["dataset.image_backbone"] = ds_cfg.get("image_backbone")
 
-    # Model configs
     model_cfg = cfg["model"]
     base_info["model.num_classes"] = model_cfg.get("num_classes")
     base_info["model.num_prototypes"] = model_cfg.get("num_prototypes")
     base_info["model.latent_dim"] = model_cfg.get("latent_dim")
 
-    # Training configs
     base_info.update(flatten_config_dict("backbone_train", cfg["backbone_train"]))
     base_info.update(flatten_config_dict("sgcp_train", cfg["sgcp_train"]))
 
@@ -224,9 +246,6 @@ def save_run_results(
     run_df = _reorder_covgap_columns(run_df)
     run_df = _round_metric_columns(run_df)
 
-    # run_csv_path = os.path.join(outdir, f"{run_name}.csv")
-    # run_df.to_csv(run_csv_path, index=False)
-
     master_csv_path = os.path.join(outdir, "all_runs_summary.csv")
     if os.path.exists(master_csv_path):
         master_df = pd.read_csv(master_csv_path)
@@ -237,43 +256,40 @@ def save_run_results(
     else:
         run_df.to_csv(master_csv_path, index=False)
 
-    # print(f"\nSaved per-run JSON: {json_path}")
-    # print(f"Saved per-run CSV : {run_csv_path}")
     print(f"Updated summary   : {master_csv_path}\n")
-
     return run_df, master_csv_path
-
 
 def run_name_for_cfg(cfg: Dict[str, Dict[str, Any]]) -> str:
     dataset_name = cfg['dataset'].get('dataset_mode', 'unknown')
     seed = cfg['experiment']['seed']
     proto = cfg['model']['num_prototypes']
     lr = cfg['sgcp_train']['lr']
-    
-    # eg.: bach_s42_proto8_lr0.001
     return f"{dataset_name}_s{seed}_proto{proto}_lr{lr}"
 
-
 def get_cached_backbone_path(cfg: Dict[str, Dict[str, Any]]) -> str:
-    """Get path to cached backbone model."""
     outdir = os.path.join(cfg["experiment"]["outdir"], "checkpoints")
     os.makedirs(outdir, exist_ok=True) 
     
     dataset_mode = cfg["dataset"]["dataset_mode"]
-    if dataset_mode == "bach": # 图像数据集
+    if dataset_mode == "bach":
         bb_name = cfg["dataset"].get("image_backbone", "resnet18")
     else:
         bb_name = "mlp"
         
     lr = cfg["backbone_train"]["lr"]
     batch_size = cfg["dataset"]["batch_size"]
-    return os.path.join(outdir, f"{dataset_mode}_{bb_name}_lr{lr}_bs{batch_size}.pth")
+    
+    # 根据不同任务缓存不同权重
+    task_suffix = ""
+    if dataset_mode == "mimic":
+        task_suffix = f"_{cfg['dataset']['mimic_label_col']}"
+        
+    return os.path.join(outdir, f"{dataset_mode}_{bb_name}{task_suffix}_n{cfg['dataset'].get('n_tra_cal', 0)}_lr{lr}_bs{batch_size}.pth")
 
 def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any], seed: int):
-    
     if data_cfg["dataset_mode"] == "mimic":
         mimic_cfg = SimpleNamespace(
-            mimic_preprocessed_path="dataset/mimic_iv_processed.csv",
+            mimic_preprocessed_path=data_cfg.get("mimic_preprocessed_path", "dataset/mimic_iv_processed.csv"),
             n_use=data_cfg.get("n_tra_cal", 0),
             train_frac=data_cfg.get("mimic_train_frac", 0.6),
             cal_frac=data_cfg.get("mimic_cal_frac", 0.2),
@@ -337,7 +353,7 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
             seed=seed,
         )
         train_loader, cal_loader, test_loader = build_dataloaders_2(syn_cfg)
-        # input_dim = 4 + data_cfg["n_nonsensitive"]
+        return train_loader, cal_loader, test_loader, syn_cfg
 
     else:
         syn_cfg = SimpleNamespace(
@@ -352,11 +368,7 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
             seed=seed,
         )
         train_loader, cal_loader, test_loader = build_dataloaders_1(syn_cfg)
-        # input_dim = 3 + data_cfg["n_nonsensitive"]
-
-
-    return train_loader, cal_loader, test_loader, syn_cfg
-
+        return train_loader, cal_loader, test_loader, syn_cfg
 
 # =========================
 # Core run
@@ -385,8 +397,8 @@ def run_experiment(
         wandb.init(
             project=exp_cfg.wandb_project,
             name=run_name_for_cfg(cfg), 
-            config=cfg,                 # 自动记录所有超参数
-            reinit=True                 # 允许在同一个脚本中运行多个 sweep 实验
+            config=cfg,                 
+            reinit=True                 
         )
         
     train_loader, cal_loader, test_loader, syn_cfg = build_dataset_and_loaders(
@@ -398,20 +410,17 @@ def run_experiment(
     print(f"[runtime] dataset_mode: {cfg['dataset']['dataset_mode']}")
     print(f"[runtime] dataset_cfg: {vars(syn_cfg)}\n")
 
-    # Update num_classes if meta provides it
     if hasattr(syn_cfg, "num_classes"):
         model_cfg.num_classes = syn_cfg.num_classes
         cfg["model"]["num_classes"] = syn_cfg.num_classes
         
     is_image = getattr(syn_cfg, "is_image", False)
 
-    # 2. Backbone
     if is_image:
         image_backbone_name = cfg["dataset"].get("image_backbone", "resnet18")
         feature_extractor, feature_dim = _create_backbone(image_backbone_name)
         cfg["model"]["feature_dim"] = feature_dim
         
-        # Build a Backbone wrapper that includes the feature extractor and classifier
         class ImageBackbone(nn.Module):
             def __init__(self, extractor, feat_dim, num_classes):
                 super().__init__()
@@ -459,8 +468,6 @@ def run_experiment(
         device=device,
     )
 
-
-
     if cfg["dataset"]["dataset_mode"] == "mimic" and cfg["experiment"].get("methods") == "sgcp" and cfg["experiment"].get("make_intro_figure", False):
         from figures.intro_borrowing_mimic.make_intro_borrowing_mimic_figure import make_intro_borrowing_mimic_figure
 
@@ -495,40 +502,5 @@ def run_experiment(
     return {
         "metrics": metrics,
         "run_df": run_df,
-        # "json_path": json_path,
-        # "run_csv_path": run_csv_path,
         "master_csv_path": master_csv_path,
     }
-
-
-# =========================
-# Main
-# =========================
-
-def main():
-    parser = build_parser()
-    args = parser.parse_args()
-
-    # Load base grid from file if provided, else use defaults
-    grid = load_grid_json(args.grid_json) if args.grid_json else {}
-
-
-    # Expand into individual run configs
-    expanded = expand_grid(grid)
-    base_cfg = config_from_args(args)
-
-    for run_idx, override_dict in enumerate(tqdm(expanded, desc="Hyperparameter Sweep")):
-        run_cfg = clone_cfg(base_cfg)
-        grid_seeds, grid_seed_key = pop_seed_sweep_from_grid(override_dict)
-        apply_overrides(run_cfg, override_dict)
-        cli_seeds = getattr(args, "seeds", None)
-        seeds_to_run = resolve_seed_list(cli_seeds, base_cfg["experiment"]["seed"], grid_seeds, grid_seed_key)
-
-        for s in seeds_to_run:
-            run_cfg["experiment"]["seed"] = s
-            exp_cfg = SimpleNamespace(**run_cfg["experiment"])
-            out = run_experiment(cfg=run_cfg, exp_cfg=exp_cfg)
-
-
-if __name__ == "__main__":
-    main()
