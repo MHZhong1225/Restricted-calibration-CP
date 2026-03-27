@@ -155,10 +155,10 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
     if args.dataset_mode == "mimic":
         cfg["dataset"].update({
             "mimic_label_col": args.mimic_label_col,
-            "mimic_sensitive_cols": args.mimic_sensitive_cols,
+            "mimic_sensitive_col": args.mimic_sensitive_col,
             "mimic_feature_cols": args.mimic_feature_cols if args.mimic_label_col == "label" else "age,gender_m,ins_private,ins_medicare,ins_medicaid,adm_emergency,adm_elective,adm_urgent,marital_married,marital_single,num_diagnoses",
         })
-        
+
         cfg["model"].update({
             "num_classes": 2 if args.mimic_label_col == "label" else 3,
         })
@@ -211,7 +211,7 @@ def save_run_results(
     
     if dataset_mode == "mimic":
         base_info["dataset.mimic_label"] = ds_cfg.get("mimic_label_col")
-        base_info["dataset.mimic_sensitive"] = ds_cfg.get("mimic_sensitive_cols")
+        base_info["dataset.mimic_sensitive"] = ds_cfg.get("mimic_sensitive_col")
         
     if dataset_mode == "single_sensitive":
         base_info["dataset.color_blue_prob"] = ds_cfg.get("color_blue_prob")
@@ -294,7 +294,7 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
             train_frac=data_cfg.get("mimic_train_frac", 0.6),
             cal_frac=data_cfg.get("mimic_cal_frac", 0.2),
             label_col=data_cfg.get("mimic_label_col", "label"),
-            sensitive_col=data_cfg.get("mimic_sensitive_col", "minority"),
+            sensitive_cols=data_cfg.get("mimic_sensitive_col", "minority"),
             age_col=data_cfg.get("mimic_age_col", "age"),
             region_col=(data_cfg.get("mimic_region_col") or None),
             feature_cols=(data_cfg.get("mimic_feature_cols") or None),
