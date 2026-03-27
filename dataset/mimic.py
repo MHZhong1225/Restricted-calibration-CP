@@ -8,22 +8,24 @@ from torch.utils.data import DataLoader, TensorDataset
 def build_dataloaders_mimic(cfg: SimpleNamespace):
     path = str(cfg.mimic_preprocessed_path)
     if not os.path.exists(path):
-        raise FileNotFoundError(f"mimic_preprocessed_path not found: {path}")
+        raise FileNotFoundError(f"MIMIC preprocessed path not found: {path}")
 
     df = pd.read_csv(path)
     label_col = str(cfg.label_col)
     
-    # 传入的多个敏感属性列（逗号分隔）
-    sens_cols = [c.strip() for c in str(getattr(cfg, "sensitive_cols", "minority")).split(",") if c.strip()]
+    # New: handle multiple sensitive columns
+    sensitive_cols_str = getattr(cfg, "sensitive_cols", "minority")
+    sensitive_cols = [c.strip() for c in sensitive_cols_str.split(",") if c.strip()]
     
-    for c in [label_col] + sens_cols:
+    for c in [label_col] + sensitive_cols:
         if c not in df.columns:
-            raise ValueError(f"Column not found: {c}")
+            raise ValueError(f"Column '{c}' not found in preprocessed MIMIC file.")
 
-    exclude = {label_col} | set(sens_cols)
+    exclude = {label_col} | set(sensitive_cols)
     if getattr(cfg, "id_cols", None):
         for c in str(cfg.id_cols).split(","):
-            exclude.add(c.strip())
+            if c.strip():
+                exclude.add(c.strip())
 
     feature_cols = getattr(cfg, "feature_cols", None)
     if feature_cols:
@@ -31,14 +33,17 @@ def build_dataloaders_mimic(cfg: SimpleNamespace):
     else:
         feature_cols = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
 
-    df = df.dropna(subset=feature_cols + [label_col] + sens_cols).copy()
+    if not feature_cols:
+        raise ValueError("No numeric feature columns found. Please specify with --mimic-feature-cols.")
+
+    df = df.dropna(subset=feature_cols + [label_col] + sensitive_cols).copy()
 
     y = df[label_col].astype(int).to_numpy()
     x = df[feature_cols].astype(np.float32).to_numpy()
 
-    # 最多3个敏感属性
+    # Handle up to 3 sensitive attributes
     attrs = np.zeros((len(df), 3), dtype=np.int64)
-    for i, col in enumerate(sens_cols[:3]): 
+    for i, col in enumerate(sensitive_cols[:3]): 
         attrs[:, i] = df[col].astype(int).to_numpy()
 
     seed = int(cfg.seed)
@@ -65,7 +70,22 @@ def build_dataloaders_mimic(cfg: SimpleNamespace):
         a1 = torch.tensor(attrs[sl, 0], dtype=torch.long)
         a2 = torch.tensor(attrs[sl, 1], dtype=torch.long)
         a3 = torch.tensor(attrs[sl, 2], dtype=torch.long)
-        return DataLoader(TensorDataset(xb, yb, a1, a2, a3), batch_size=int(cfg.batch_size), shuffle=shuffle)
+        ds = TensorDataset(xb, yb, a1, a2, a3)
+        return DataLoader(ds, batch_size=int(cfg.batch_size), shuffle=shuffle, drop_last=False)
 
-    meta = SimpleNamespace(dataset_mode="mimic", n_total=n_total, feature_dim=int(x.shape[1]))
-    return make_loader(splits["train"], True), make_loader(splits["cal"], False), make_loader(splits["test"], False), meta
+    train_loader = make_loader(splits["train"], shuffle=True)
+    cal_loader = make_loader(splits["cal"], shuffle=False)
+    test_loader = make_loader(splits["test"], shuffle=False)
+
+    meta = SimpleNamespace(
+        dataset_mode="mimic",
+        path=path,
+        n_total=n_total,
+        n_train=train_end,
+        n_cal=cal_end - train_end,
+        n_test=n_total - cal_end,
+        label_col=label_col,
+        sensitive_cols=sensitive_cols,
+        feature_dim=int(x.shape[1]),
+    )
+    return train_loader, cal_loader, test_loader, meta

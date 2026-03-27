@@ -60,8 +60,8 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
             "group1_prob_1": 0.5, "group2_prob_1": 0.5, "delta1": 0.5, "delta0": 0.2,
             "n_nonsensitive": 6, "batch_size": 128, "dataset_mode": "single_sensitive",
             "mimic_preprocessed_path": "dataset/mimic_iv_processed.csv", "mimic_train_frac": 0.6, "mimic_cal_frac": 0.2,
-            "mimic_label_col": "label", "mimic_sensitive_col": "minority", "mimic_age_col": "age",
-            "mimic_region_col": "", "mimic_feature_cols": "", "mimic_id_cols": "SUBJECT_ID,HADM_ID",
+            "mimic_label_col": "label", "mimic_sensitive_cols": "minority,gender_m,public_insurance",
+            "mimic_feature_cols": "", "mimic_id_cols": "SUBJECT_ID,HADM_ID",
         },
         "model": {
             "hidden_dim": 128, "feature_dim": 32, "latent_dim": 8, "num_prototypes": 8,
@@ -94,7 +94,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Comma-separated list of feature columns for MIMIC")
     parser.add_argument("--mimic-sensitive-cols", type=str, default="minority,gender_m,public_insurance",
                         help="Comma-separated sensitive attributes (e.g., 'minority,gender_m,public_insurance')")
-
 
     parser.add_argument("--n_tra_cal", type=int, default=200)
     parser.add_argument("--test-samples", type=int, default=500)
@@ -139,7 +138,6 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
             "wandb_project": getattr(args, "wandb_project", "SGCP") + f"_{args.alpha}",
         })
     
-    # 通用数据集参数
     cfg["dataset"].update({
             "n_tra_cal": args.n_tra_cal, 
             "test_samples": args.test_samples, 
@@ -151,11 +149,11 @@ def config_from_args(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
         "hidden_dim": args.hidden_dim, "latent_dim": args.latent_dim,
         "num_prototypes": args.num_prototypes, "num_classes": args.num_classes,
     })
-    # 
+    
     if args.dataset_mode == "mimic":
         cfg["dataset"].update({
             "mimic_label_col": args.mimic_label_col,
-            "mimic_sensitive_col": args.mimic_sensitive_col,
+            "mimic_sensitive_cols": args.mimic_sensitive_cols,
             "mimic_feature_cols": args.mimic_feature_cols if args.mimic_label_col == "label" else "age,gender_m,ins_private,ins_medicare,ins_medicaid,adm_emergency,adm_elective,adm_urgent,marital_married,marital_single,num_diagnoses",
         })
 
@@ -211,7 +209,7 @@ def save_run_results(
     
     if dataset_mode == "mimic":
         base_info["dataset.mimic_label"] = ds_cfg.get("mimic_label_col")
-        base_info["dataset.mimic_sensitive"] = ds_cfg.get("mimic_sensitive_col")
+        base_info["dataset.mimic_sensitive"] = ds_cfg.get("mimic_sensitive_cols") 
         
     if dataset_mode == "single_sensitive":
         base_info["dataset.color_blue_prob"] = ds_cfg.get("color_blue_prob")
@@ -279,7 +277,6 @@ def get_cached_backbone_path(cfg: Dict[str, Dict[str, Any]]) -> str:
     lr = cfg["backbone_train"]["lr"]
     batch_size = cfg["dataset"]["batch_size"]
     
-    # 根据不同任务缓存不同权重
     task_suffix = ""
     if dataset_mode == "mimic":
         task_suffix = f"_{cfg['dataset']['mimic_label_col']}"
@@ -294,9 +291,7 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
             train_frac=data_cfg.get("mimic_train_frac", 0.6),
             cal_frac=data_cfg.get("mimic_cal_frac", 0.2),
             label_col=data_cfg.get("mimic_label_col", "label"),
-            sensitive_cols=data_cfg.get("mimic_sensitive_col", "minority"),
-            age_col=data_cfg.get("mimic_age_col", "age"),
-            region_col=(data_cfg.get("mimic_region_col") or None),
+            sensitive_cols=data_cfg.get("mimic_sensitive_cols", "minority"), # 全部统一为复数
             feature_cols=(data_cfg.get("mimic_feature_cols") or None),
             id_cols=(data_cfg.get("mimic_id_cols") or None),
             batch_size=data_cfg["batch_size"],
