@@ -9,12 +9,10 @@ from util.utils import simple_kmeans, extract_sgcp_weights, extract_proto_weight
 # Calibration
 # =========================
 
-
 @torch.no_grad()
 def calibrate_global_cp(backbone, cal_loader, alpha=0.1, device="cpu"):
     data = extract_all(backbone, cal_loader, device=device)
     return GlobalCP(threshold=conformal_quantile(data["scores"], alpha))
-
 
 
 def evaluate_prediction_sets(pred_sets, y_true, attr1, attr2, attr3, attr4=None, attr5=None, attr6=None, attr7=None, alpha=None):
@@ -127,13 +125,6 @@ def evaluate_prediction_sets(pred_sets, y_true, attr1, attr2, attr3, attr4=None,
     else:
         out["fairgap_attr1"] = float("nan")
 
-        # Overall attr1 fairness gap (max difference across all pairs if >1 groups)
-        if len(attr1_covs) >= 2:
-            vals = list(attr1_covs.values())
-            out["fairgap_attr1"] = float(np.max(vals) - np.min(vals))
-        else:
-            out["fairgap_attr1"] = float("nan")
-
     return out
 
 
@@ -239,13 +230,6 @@ def evaluate_global_cp(backbone, cp_obj, test_loader, device="cpu", alpha=None):
     data = extract_all(backbone, test_loader, device=device)
     thresholds = np.full(len(data["y"]), cp_obj.threshold, dtype=np.float32)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    
-    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:
-        n = len(data["y"])
-        probs = np.asarray(data["probs"], dtype=np.float32)
-        true_scores = 1.0 - probs[np.arange(n), data["y"]]
-        bins = np.quantile(true_scores, [0.33, 0.67])
-        data["age"] = np.digitize(true_scores, bins)
         
     return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
                                     attr4=data.get("diag"), attr5=data.get("attr5"), 
@@ -258,13 +242,6 @@ def evaluate_fixed_group_cp(backbone, cp_obj, test_loader, key_fn, device="cpu",
     keys = key_fn(data)
     thresholds = cp_obj.threshold_for_keys(keys)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    
-    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:
-        n = len(data["y"])
-        probs = np.asarray(data["probs"], dtype=np.float32)
-        true_scores = 1.0 - probs[np.arange(n), data["y"]]
-        bins = np.quantile(true_scores, [0.33, 0.67])
-        data["age"] = np.digitize(true_scores, bins)
         
     return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
                                     attr4=data.get("diag"), attr5=data.get("attr5"), 
@@ -276,13 +253,6 @@ def evaluate_hard_cluster_cp(backbone, cp_obj, test_loader, device="cpu", alpha=
     data = extract_all(backbone, test_loader, device=device)
     thresholds = cp_obj.threshold_for_batch(data["feats"])
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    
-    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:
-        n = len(data["y"])
-        probs = np.asarray(data["probs"], dtype=np.float32)
-        true_scores = 1.0 - probs[np.arange(n), data["y"]]
-        bins = np.quantile(true_scores, [0.33, 0.67])
-        data["age"] = np.digitize(true_scores, bins)
         
     return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
                                     attr4=data.get("diag"), attr5=data.get("attr5"), 
@@ -295,13 +265,6 @@ def evaluate_prototype_cp(backbone, assign_model, cp_obj, test_loader, device="c
     weights = extract_proto_weights(assign_model, test_loader, device=device)
     thresholds = cp_obj.threshold_for_batch(weights)
     pred_sets = prediction_set_from_probs_and_thresholds(data["probs"], thresholds)
-    
-    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:
-        n = len(data["y"])
-        probs = np.asarray(data["probs"], dtype=np.float32)
-        true_scores = 1.0 - probs[np.arange(n), data["y"]]
-        bins = np.quantile(true_scores, [0.33, 0.67])
-        data["age"] = np.digitize(true_scores, bins)
         
     return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
                                     attr4=data.get("diag"), attr5=data.get("attr5"), 
@@ -325,13 +288,6 @@ def evaluate_sg_cp(backbone, assign_model, cp_obj, test_loader, device="cpu", n_
     for i in range(n):
         labels = [y for y in range(c) if float(v_all[i, y]) <= qv]
         pred_sets.append(labels)
-        
-    if len(np.unique(data["age"])) == 1 and data["age"][0] == 0:  
-        true_scores = 1.0 - probs[np.arange(n), data["y"]]
-        # simple mid hard
-        bins = np.quantile(true_scores, [0.33, 0.67])
-        difficulty_bins = np.digitize(true_scores, bins)
-        data["age"] = difficulty_bins
 
     return evaluate_prediction_sets(pred_sets, data["y"], data["color"], data["age"], data["region"], 
                                     attr4=data.get("diag"), attr5=data.get("attr5"), 
