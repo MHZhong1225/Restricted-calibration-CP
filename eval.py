@@ -8,7 +8,6 @@ from SelectiveCI_fairness.sgcp_flow import StochasticAssignment, PrototypeAssign
 from FaReG.Group_fairness.cp import Marginal_Fairness, FaReG_Fairness
 from FaReG.Group_fairness.networks import FaReG as FaReGNet
 
-
 from util.eval_tool import (
     evaluate_global_cp,
     evaluate_fixed_group_cp,
@@ -143,7 +142,6 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
     return out
 
 
-
 def evaluate_fareg_cp(backbone, cal_loader, test_loader, alpha, device="cpu"):
     dev = device if isinstance(device, torch.device) else torch.device(device)
 
@@ -189,8 +187,10 @@ def evaluate_fareg_cp(backbone, cal_loader, test_loader, alpha, device="cpu"):
 
     def _fareg_inputs(np_dict):
         color = np_dict["color"].astype(np.float32)
-        age = (np_dict["age"].astype(np.float32) / 4.0) if np.max(np_dict["age"]) > 0 else np_dict["age"].astype(np.float32)
-        region = (np_dict["region"].astype(np.float32) / 3.0) if np.max(np_dict["region"]) > 0 else np_dict["region"].astype(np.float32)
+        age_max = max(1.0, float(np.max(np_dict["age"])))
+        age = np_dict["age"].astype(np.float32) / age_max
+        reg_max = max(1.0, float(np.max(np_dict["region"])))
+        region = np_dict["region"].astype(np.float32) / reg_max
         return np.stack([color, age, region], axis=1).astype(np.float32)
 
     Xf_cal = _fareg_inputs(cal_np)
@@ -347,7 +347,6 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         device=device,
         alpha=alpha,
     )
-    
 
     if getattr(exp_cfg, "run_afcp_adaptive", False):
         cal_np = loader_to_numpy(cal_loader)
@@ -363,26 +362,28 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         group_X_calib = None
         group_X_test = None
 
+        is_tabular = (X_calib.ndim == 2)
+
         if len(batch0) == 5:
             att_idx_emb = [d - 1, d - 2, d - 3]
             embedded_ok = False
-            if n_check > 0:
+            if is_tabular and n_check > 0:
                 embedded_ok = float(np.mean(X_calib[:n_check, att_idx_emb[0]].astype(int) == cal_np["color"][:n_check].astype(int))) >= 0.95
+            
             if embedded_ok:
                 att_idx = att_idx_emb
             else:
                 group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"]]).astype(int)
                 group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"]]).astype(int)
                 att_idx = [0, 1, 2]
+                
         elif len(batch0) == 6:
             att_idx = [d - 1, d - 2, d - 4]
         elif len(batch0) == 7:
-            # MIMIC/Adult data with diag/attr4
             group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"], cal_np["diag"]]).astype(int)
             group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"], test_np["diag"]]).astype(int)
             att_idx = [0, 1, 2, 3]
         elif len(batch0) == 9:
-            # Nursery data with 7 attributes
             group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"], cal_np["diag"], cal_np["attr5"], cal_np["attr6"], cal_np["attr7"]]).astype(int)
             group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"], test_np["diag"], test_np["attr5"], test_np["attr6"], test_np["attr7"]]).astype(int)
             att_idx = [0, 1, 2, 3, 4, 5, 6]
@@ -406,7 +407,6 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         )
         results["AFCP"] = prediction_sets_to_metrics(test_np, C_sets_afcp, alpha)
 
-
     results["FaReG"] = evaluate_fareg_cp(
         backbone=backbone,
         cal_loader=cal_loader,
@@ -416,8 +416,6 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
     )
 
     return results
-
-
 
 def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, sgcp_cfg, device):
     alpha = exp_cfg.alpha
@@ -467,5 +465,4 @@ def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, mode
         alpha=alpha,
     )
 
-
-    return results, sg_assign, sg_cp 
+    return results, sg_assign, sg_cp
