@@ -344,6 +344,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         soft_assign,
         soft_cp,
         test_loader,
+        dataset_name=exp_cfg.dataset_mode,
         device=device,
         alpha=alpha,
     )
@@ -460,6 +461,7 @@ def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, mode
         sg_assign,
         sg_cp,
         test_loader,
+        dataset_name = exp_cfg.dataset_mode,
         device=device,
         n_latent_samples=sgcp_cfg.eval_latent_samples,
         alpha=alpha,
