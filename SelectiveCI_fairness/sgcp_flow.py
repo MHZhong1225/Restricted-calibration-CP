@@ -4,24 +4,77 @@ import torch.nn.functional as F
 
 
 
+import torch
+import torch.nn as nn
+
 class Backbone(nn.Module):
-    def __init__(self, input_dim=10, hidden_dim=128, num_classes=6):
-        super().__init__()
-        self.feature_dim = hidden_dim // 2
-        self.feature_extractor = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, self.feature_dim),
-        )
-        self.classifier = nn.Linear(self.feature_dim, num_classes)
+    def __init__(self, input_dim=10, hidden_dim=128, num_classes=6, use_dropout=False):
+        super(Backbone, self).__init__()
+        
+        self.use_dropout = use_dropout
+        self.feature_dim = 256 + 128 # l2 + l3
+        self.layer_1 = nn.Linear(input_dim, 256)
+        self.layer_2 = nn.Linear(256, 256)
+        self.layer_3 = nn.Linear(256, 128)
+        self.layer_4 = nn.Linear(128, 64)
+        self.layer_5 = nn.Linear(64, num_classes)
+
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.2)
+        
+        self.batchnorm1 = nn.BatchNorm1d(256)
+        self.batchnorm2 = nn.BatchNorm1d(256)
+        self.batchnorm3 = nn.BatchNorm1d(128)
+        self.batchnorm4 = nn.BatchNorm1d(64)
 
     def forward(self, x):
-        h = self.feature_extractor(x)
-        logits = self.classifier(h)
+        x = self.layer_1(x)
+        x = self.relu(x)
+        if self.use_dropout:
+            x = self.dropout(x)
+            x = self.batchnorm1(x)
+
+        z2 = self.layer_2(x)
+        x = self.relu(z2)
+        if self.use_dropout:
+            x = self.dropout(x)
+            x = self.batchnorm2(x)
+
+        z3 = self.layer_3(x)
+        x = self.relu(z3)
+        if self.use_dropout:
+            x = self.dropout(x)
+            x = self.batchnorm3(x)
+            
+        x = self.layer_4(x)
+        x = self.relu(x)
+        if self.use_dropout:
+            x = self.dropout(x)
+            x = self.batchnorm4(x)
+
+        logits = self.layer_5(x)
+
+        h = torch.cat([z2, z3], dim=1)
         return logits, h
 
+
+# class Backbone(nn.Module):
+#     def __init__(self, input_dim=10, hidden_dim=128, num_classes=6):
+#         super().__init__()
+#         self.feature_dim = hidden_dim // 2
+#         self.feature_extractor = nn.Sequential(
+#             nn.Linear(input_dim, hidden_dim),
+#             nn.ReLU(),
+#             nn.Linear(hidden_dim, hidden_dim),
+#             nn.ReLU(),
+#             nn.Linear(hidden_dim, self.feature_dim),
+#         )
+#         self.classifier = nn.Linear(self.feature_dim, num_classes)
+
+#     def forward(self, x):
+#         h = self.feature_extractor(x)
+#         logits = self.classifier(h)
+#         return logits, h
 
 # =========================
 # 3. Utility networks

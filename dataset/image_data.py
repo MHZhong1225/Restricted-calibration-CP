@@ -19,13 +19,11 @@ class ImageDatasetWithAttrs(Dataset):
         
     def __getitem__(self, idx):
         x, y = self.dataset[idx]
-        # a1: 真实分类标签
-        # a2: 占位
-        # a3: 占位
+        # a1: y
         return x, y, y, 0, 0
 
 def build_dataloaders_bach(cfg: SimpleNamespace) -> Tuple[Any, Any, Any, Any]:
-    data_dir = getattr(cfg, "image_data_dir", "../../BrCPT/datasets/bach")
+    data_dir = getattr(cfg, "image_data_dir", "/home/ubuntu/zmh/BrCPT/datasets/bach")
     
     train_dir = os.path.join(data_dir, "train")
     val_dir = os.path.join(data_dir, "val")
@@ -77,7 +75,18 @@ def build_dataloaders_bach(cfg: SimpleNamespace) -> Tuple[Any, Any, Any, Any]:
                 self.transform = transform
             def __len__(self): return len(self.subset)
             def __getitem__(self, idx):
-                x, y, a1, a2, a3 = self.subset[idx]
+                # The subset refers to full_dataset, which is ImageDatasetWithAttrs
+                # It returns (x, y, a1, a2, a3) where a1=y, a2=0, a3=0
+                item = self.subset[idx]
+                if len(item) == 5:
+                    x, y, a1, a2, a3 = item
+                else:
+                    x, y = item
+                    a1, a2, a3 = y, 0, 0
+                
+                # Make sure a1 is exactly y so it reflects the 4 classes
+                a1 = y
+                    
                 if self.transform:
                     x = self.transform(x)
                 return x, y, a1, a2, a3
@@ -89,7 +98,7 @@ def build_dataloaders_bach(cfg: SimpleNamespace) -> Tuple[Any, Any, Any, Any]:
     batch_size = getattr(cfg, "batch_size", 32)
     
     # Use multiple workers for faster image loading
-    num_workers = 16
+    num_workers = 6
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
     cal_loader = DataLoader(cal_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
@@ -101,7 +110,7 @@ def build_dataloaders_bach(cfg: SimpleNamespace) -> Tuple[Any, Any, Any, Any]:
         n_train=len(train_dataset),
         n_cal=len(cal_dataset),
         n_test=len(test_dataset),
-        num_classes=train_dataset.dataset.num_classes if hasattr(train_dataset, 'dataset') else 4,
+        num_classes=train_dataset.num_classes if hasattr(train_dataset, 'dataset') else 4,
         feature_dim=None, # Will be set based on backbone
         is_image=True
     )
