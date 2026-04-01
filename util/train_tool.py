@@ -10,7 +10,8 @@ import wandb
 
 def train_backbone(model, train_loader, epochs=150, lr=1e-3, device="cpu"):
     model = model.to(device)
-    opt = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
+    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
+    # opt = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
     scheduler = lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
     for epoch in range(epochs):

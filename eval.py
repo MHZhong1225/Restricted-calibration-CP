@@ -23,17 +23,20 @@ from util.eval_tool import (
 from util.utils import loader_to_numpy
 from util.train_tool import train_prototype_assignment, train_stochastic_assignment
 
+
 def prediction_sets_to_metrics(test_np, C_sets, alpha):
     y = test_np['y']
-    attr1 = test_np['color']
-    attr2 = test_np['age']
-    attr3 = test_np['region']
+    attr1 = test_np.get('attr1', test_np.get('color'))
+    attr2 = test_np.get('attr2', test_np.get('age'))
+    attr3 = test_np.get('attr3', test_np.get('region'))
 
     cover = np.array([int(int(y[i]) in set(C_sets[i])) for i in range(len(y))], dtype=float)
     size = np.array([len(C_sets[i]) for i in range(len(y))], dtype=float)
     
     def grp(vals, key):
         out = {}
+        if key is None:
+            return out
         for k in sorted(np.unique(key)):
             m = key == k
             out[int(k)] = float(vals[m].mean()) if m.any() else float('nan')
@@ -47,6 +50,8 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
         return float(np.mean(np.abs(np.asarray(vals, dtype=float) - target)))
         
     def cov_gap_from_keys(keys):
+        if keys is None:
+            return float("nan")
         uniq = np.unique(keys)
         if len(uniq) == 0:
             return float("nan")
@@ -65,7 +70,7 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
     attr2_cov = grp(cover, attr2)
     attr3_cov = grp(cover, attr3)
     
-    attr4 = test_np.get("diag")
+    attr4 = test_np.get("attr4", test_np.get("diag"))
     attr4_cov = grp(cover, attr4) if attr4 is not None else {}
     attr4_size = grp(size, attr4) if attr4 is not None else {}
     
@@ -81,7 +86,12 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
     attr7_cov = grp(cover, attr7) if attr7 is not None else {}
     attr7_size = grp(size, attr7) if attr7 is not None else {}
 
-    joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(attr1, attr2, attr3)], dtype=object)
+    # 防御性判断：部分数据集没有 attr2 / attr3 (如 BACH)
+    if attr1 is not None and attr2 is not None and attr3 is not None:
+        joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(attr1, attr2, attr3)], dtype=object)
+    else:
+        joint_keys = None
+
     covgap_attr1 = cov_gap_from_coverages(attr1_cov)
     covgap_attr2 = cov_gap_from_coverages(attr2_cov)
     covgap_attr3 = cov_gap_from_coverages(attr3_cov)
@@ -99,8 +109,8 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
         'attr3_set_sizes': grp(size, attr3),
         'attr4_coverages': attr4_cov,
         'attr4_set_sizes': attr4_size,
-        'blue_coverage': float(cover[attr1 == 1].mean()) if 1 in attr1 else float("nan"),
-        'blue_avg_set_size': float(size[attr1 == 1].mean()) if 1 in attr1 else float("nan"),
+        'blue_coverage': float(cover[attr1 == 1].mean()) if (attr1 is not None and 1 in attr1) else float("nan"),
+        'blue_avg_set_size': float(size[attr1 == 1].mean()) if (attr1 is not None and 1 in attr1) else float("nan"),
         'covgap': covgap,
         'covgap_attr1': covgap_attr1,
         'covgap_attr2': covgap_attr2,
@@ -108,7 +118,7 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
         'covgap_attr4': covgap_attr4,
     }
     
-    if attr4 is not None:
+    if attr4 is not None and attr1 is not None:
         attr4_attr1_gaps = {}
         for d in np.unique(attr4):
             idx_d = (attr4 == d)
@@ -186,11 +196,22 @@ def evaluate_fareg_cp(backbone, cal_loader, test_loader, alpha, device="cpu"):
     )
 
     def _fareg_inputs(np_dict):
-        color = np_dict["color"].astype(np.float32)
-        age_max = max(1.0, float(np.max(np_dict["age"])))
-        age = np_dict["age"].astype(np.float32) / age_max
-        reg_max = max(1.0, float(np.max(np_dict["region"])))
-        region = np_dict["region"].astype(np.float32) / reg_max
+        color = np_dict.get("attr1", np_dict.get("color", np.zeros_like(np_dict["y"]))).astype(np.float32)
+        
+        age_arr = np_dict.get("attr2", np_dict.get("age"))
+        if age_arr is not None:
+            age_max = max(1.0, float(np.max(age_arr)))
+            age = age_arr.astype(np.float32) / age_max
+        else:
+            age = np.zeros_like(color)
+            
+        reg_arr = np_dict.get("attr3", np_dict.get("region"))
+        if reg_arr is not None:
+            reg_max = max(1.0, float(np.max(reg_arr)))
+            region = reg_arr.astype(np.float32) / reg_max
+        else:
+            region = np.zeros_like(color)
+            
         return np.stack([color, age, region], axis=1).astype(np.float32)
 
     Xf_cal = _fareg_inputs(cal_np)
@@ -270,30 +291,41 @@ def evaluate_fareg_cp(backbone, cal_loader, test_loader, alpha, device="cpu"):
 
 def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, soft_cfg, device):
     alpha = exp_cfg.alpha
+    ds_name = exp_cfg.dataset_mode
 
     marginal_cp = calibrate_global_cp(backbone, cal_loader, alpha=alpha, device=device)
+    
     partial_color_cp = calibrate_fixed_group_cp(
         backbone,
         cal_loader,
-        key_fn=lambda d: list(d["color"]),
+        key_fn=lambda d: list(d["attr1"]),  # 修正：使用 attr1
         alpha=alpha,
         device=device,
     )
+    
+    def exhaustive_keys(d):
+        if "attr2" in d and "attr3" in d:
+            return list(zip(d["attr1"], d["attr2"], d["attr3"]))
+        return list(d["attr1"])
+
     exhaustive_cp = calibrate_fixed_group_cp(
         backbone,
         cal_loader,
-        key_fn=lambda d: list(zip(d["color"], d["age"], d["region"])),
+        key_fn=exhaustive_keys,  # 修正：安全的合并方式
         alpha=alpha,
         device=device,
     )
 
     results = {
-        "Marginal CP": evaluate_global_cp(backbone, marginal_cp, test_loader, device=device, alpha=alpha),
+        "Marginal CP": evaluate_global_cp(
+            backbone, marginal_cp, test_loader, dataset_name=ds_name, device=device, alpha=alpha
+        ),
         "Partial CP": evaluate_fixed_group_cp(
             backbone,
             partial_color_cp,
             test_loader,
-            key_fn=lambda d: list(d["color"]),
+            key_fn=lambda d: list(d["attr1"]), # 修正：使用 attr1
+            dataset_name=ds_name,
             device=device,
             alpha=alpha,
         ),
@@ -301,7 +333,8 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
             backbone,
             exhaustive_cp,
             test_loader,
-            key_fn=lambda d: list(zip(d["color"], d["age"], d["region"])),
+            key_fn=exhaustive_keys, # 修正：安全的合并方式
+            dataset_name=ds_name,
             device=device,
             alpha=alpha,
         ),
@@ -315,7 +348,9 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         device=device,
         seed=exp_cfg.hard_cluster_seed,
     )
-    results["Clustered CP"] = evaluate_hard_cluster_cp(backbone, hard_cp, test_loader, device=device, alpha=alpha)
+    results["Clustered CP"] = evaluate_hard_cluster_cp(
+        backbone, hard_cp, test_loader, dataset_name=ds_name, device=device, alpha=alpha
+    )
 
     soft_assign = PrototypeAssignment(
         backbone=backbone,
@@ -344,7 +379,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         soft_assign,
         soft_cp,
         test_loader,
-        dataset_name=exp_cfg.dataset_mode,
+        dataset_name=ds_name,
         device=device,
         alpha=alpha,
     )
@@ -364,29 +399,51 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         group_X_test = None
 
         is_tabular = (X_calib.ndim == 2)
+        
+        # 兼容地获取参数
+        c_cal = cal_np.get("attr1", cal_np.get("color"))
+        a_cal = cal_np.get("attr2", cal_np.get("age"))
+        r_cal = cal_np.get("attr3", cal_np.get("region"))
+        d_cal = cal_np.get("attr4", cal_np.get("diag"))
+        a5_cal = cal_np.get("attr5")
+        a6_cal = cal_np.get("attr6")
+        a7_cal = cal_np.get("attr7")
+        
+        c_test = test_np.get("attr1", test_np.get("color"))
+        a_test = test_np.get("attr2", test_np.get("age"))
+        r_test = test_np.get("attr3", test_np.get("region"))
+        d_test = test_np.get("attr4", test_np.get("diag"))
+        a5_test = test_np.get("attr5")
+        a6_test = test_np.get("attr6")
+        a7_test = test_np.get("attr7")
 
         if len(batch0) == 5:
             att_idx_emb = [d - 1, d - 2, d - 3]
             embedded_ok = False
-            if is_tabular and n_check > 0:
-                embedded_ok = float(np.mean(X_calib[:n_check, att_idx_emb[0]].astype(int) == cal_np["color"][:n_check].astype(int))) >= 0.95
+            if is_tabular and n_check > 0 and c_cal is not None:
+                embedded_ok = float(np.mean(X_calib[:n_check, att_idx_emb[0]].astype(int) == c_cal[:n_check].astype(int))) >= 0.95
             
             if embedded_ok:
                 att_idx = att_idx_emb
             else:
-                group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"]]).astype(int)
-                group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"]]).astype(int)
-                att_idx = [0, 1, 2]
-                
+                if a_cal is not None and r_cal is not None:
+                    group_X_calib = np.column_stack([c_cal, a_cal, r_cal]).astype(int)
+                    group_X_test = np.column_stack([c_test, a_test, r_test]).astype(int)
+                    att_idx = [0, 1, 2]
+                else:
+                    group_X_calib = np.column_stack([c_cal]).astype(int)
+                    group_X_test = np.column_stack([c_test]).astype(int)
+                    att_idx = [0]
+                    
         elif len(batch0) == 6:
             att_idx = [d - 1, d - 2, d - 4]
         elif len(batch0) == 7:
-            group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"], cal_np["diag"]]).astype(int)
-            group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"], test_np["diag"]]).astype(int)
+            group_X_calib = np.column_stack([c_cal, a_cal, r_cal, d_cal]).astype(int)
+            group_X_test = np.column_stack([c_test, a_test, r_test, d_test]).astype(int)
             att_idx = [0, 1, 2, 3]
         elif len(batch0) == 9:
-            group_X_calib = np.column_stack([cal_np["color"], cal_np["age"], cal_np["region"], cal_np["diag"], cal_np["attr5"], cal_np["attr6"], cal_np["attr7"]]).astype(int)
-            group_X_test = np.column_stack([test_np["color"], test_np["age"], test_np["region"], test_np["diag"], test_np["attr5"], test_np["attr6"], test_np["attr7"]]).astype(int)
+            group_X_calib = np.column_stack([c_cal, a_cal, r_cal, d_cal, a5_cal, a6_cal, a7_cal]).astype(int)
+            group_X_test = np.column_stack([c_test, a_test, r_test, d_test, a5_test, a6_test, a7_test]).astype(int)
             att_idx = [0, 1, 2, 3, 4, 5, 6]
         else:
             raise ValueError(f"AFCPAdaptiveSelection expects 5-, 6-, 7-, or 9-field batches, got {len(batch0)}")
@@ -417,6 +474,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
     )
 
     return results
+
 
 def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, model_cfg, sgcp_cfg, device):
     alpha = exp_cfg.alpha
@@ -461,7 +519,7 @@ def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, mode
         sg_assign,
         sg_cp,
         test_loader,
-        dataset_name = exp_cfg.dataset_mode,
+        dataset_name=exp_cfg.dataset_mode, # 修正：增加必要参数
         device=device,
         n_latent_samples=sgcp_cfg.eval_latent_samples,
         alpha=alpha,

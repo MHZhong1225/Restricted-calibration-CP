@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-backbone", type=str, default="resnet18", 
                         choices=["resnet18", "resnet34", "resnet50", "efficientnet-b0"])
 
-    parser.add_argument("--hidden-dim", type=int, default=32)
+    parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--latent-dim", type=int, default=8)
     parser.add_argument("--num-prototypes", type=int, default=8)
     parser.add_argument("--num-classes", type=int, default=6)
@@ -426,7 +426,6 @@ def run_experiment(
             soft_cfg=soft_cfg,
             device=device,
         )
-        # 如果是 "all"，顺便把 SGCP 也一起评了
         if exp_cfg.methods == "all":
             from eval import evaluate_sgcp
             sgcp_metrics, sg_assign, _sg_cp = evaluate_sgcp(

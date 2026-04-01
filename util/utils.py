@@ -67,70 +67,48 @@ def loader_to_numpy(loader, device='cpu'):
 # =========================
 # Conformal helpers
 # =========================
+import torch
+import numpy as np
 
 @torch.no_grad()
 def extract_all(backbone, loader, device="cpu"):
     backbone.eval()
-    feats_all, probs_all, scores_all = [], [], []
-    y_all, attr1_all, attr2_all, attr3_all, attr4_all = [], [], [], [], []
-    attr5_all, attr6_all, attr7_all = [], [], []
-    has_attr4 = False
-    has_nursery_attrs = False
+    backbone.to(device)
+
+    all_y, all_probs, all_scores, all_feats = [], [], [], []
+    all_attrs = {f"attr{i+1}": [] for i in range(7)}
 
     for batch in loader:
-        # Handle 5-element, 6-element, 7-element, and 9-element batches
-        if len(batch) == 5:
-            # BACH / Single Sensitive / Synthetic
-            x, y, a1, a2, a3 = batch
-            a4 = torch.zeros_like(y)
-        elif len(batch) == 6:
-            x, y, a1, a2, _, a3 = batch
-            a4 = torch.zeros_like(y)
-        elif len(batch) == 7:
-            x, y, a1, a2, a3, a4, _ = batch
-            has_attr4 = True
-        elif len(batch) == 9:
-            x, y, a1, a2, a3, a4, a5, a6, a7 = batch
-            has_attr4 = True
-            has_nursery_attrs = True
-        else:
-            raise ValueError(f"Unexpected batch size: {len(batch)}")
-        
-        x = x.to(device)
+        x = batch[0].to(device)
+        y = batch[1].to(device)
+
         logits, feats = backbone(x)
-        probs = F.softmax(logits, dim=-1).cpu()
-        scores = 1.0 - probs[torch.arange(len(y)), y]
+        probs = torch.softmax(logits, dim=1)
+        scores = 1.0 - probs.gather(1, y.unsqueeze(1)).squeeze(1)
 
-        feats_all.append(feats.cpu().numpy())
-        probs_all.append(probs.numpy())
-        scores_all.append(scores.numpy())
-        y_all.append(y.numpy())
-        attr1_all.append(a1.numpy())
-        attr2_all.append(a2.numpy())
-        attr3_all.append(a3.numpy())
-        attr4_all.append(a4.numpy())
-        if has_nursery_attrs:
-            attr5_all.append(a5.numpy())
-            attr6_all.append(a6.numpy())
-            attr7_all.append(a7.numpy())
+        all_y.append(y.cpu().numpy())
+        all_probs.append(probs.cpu().numpy())
+        all_scores.append(scores.cpu().numpy())
+        all_feats.append(feats.cpu().numpy())
 
-    out = {
-        "feats": np.concatenate(feats_all),
-        "probs": np.concatenate(probs_all),
-        "scores": np.concatenate(scores_all),
-        "y": np.concatenate(y_all),
-        "color": np.concatenate(attr1_all),
-        "age": np.concatenate(attr2_all),
-        "region": np.concatenate(attr3_all),
+        # MIMIC/Syn/BACH 5  Nursery 9
+        for i in range(2, len(batch)):
+            attr_key = f"attr{i-1}"
+            if attr_key in all_attrs:
+                all_attrs[attr_key].append(batch[i].cpu().numpy())
+
+    data = {
+        "y": np.concatenate(all_y),
+        "probs": np.concatenate(all_probs),
+        "scores": np.concatenate(all_scores),
+        "feats": np.concatenate(all_feats),
     }
-    if has_attr4:
-        out["diag"] = np.concatenate(attr4_all)
-    if has_nursery_attrs:
-        out["attr5"] = np.concatenate(attr5_all)
-        out["attr6"] = np.concatenate(attr6_all)
-        out["attr7"] = np.concatenate(attr7_all)
-    return out
 
+    for attr_key, attr_list in all_attrs.items():
+        if len(attr_list) > 0:
+            data[attr_key] = np.concatenate(attr_list)
+
+    return data
 
 def conformal_quantile(scores, alpha):
     n = len(scores)
