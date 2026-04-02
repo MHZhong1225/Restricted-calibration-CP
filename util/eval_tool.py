@@ -143,6 +143,7 @@ def _group_stats(values, cover, sizes):
     return covs, szs
 
 
+# \mathrm{FairGap}(A)
 def _fairness_gap_from_coverages(coverages):
     vals = [v for v in coverages.values() if not np.isnan(v)]
     if len(vals) < 2:
@@ -150,7 +151,7 @@ def _fairness_gap_from_coverages(coverages):
     vals = np.asarray(vals, dtype=float)
     return float(np.max(vals) - np.min(vals))
 
-
+# \mathrm{CovGap}(A)
 def _cov_gap_from_coverages(coverages, target):
     vals = [v for v in coverages.values() if not np.isnan(v)]
     if len(vals) == 0:
@@ -176,7 +177,7 @@ def _cov_gap_from_keys(keys, cover, target):
         return float("nan")
     return float(np.mean(np.asarray(gaps, dtype=float)))
 
-
+# covgap_joint
 def _build_joint_keys(attrs: dict, n: int):
     used_names = [k for k, v in attrs.items() if v is not None]
     if len(used_names) == 0:

@@ -58,7 +58,7 @@ def default_cfg() -> Dict[str, Dict[str, Any]]:
         "dataset": {
             "n_tra_cal": 0, "test_samples": 500, "color_blue_prob": 0.10,
             "group1_prob_1": 0.5, "group2_prob_1": 0.5, "delta1": 0.5, "delta0": 0.2,
-            "n_nonsensitive": 6, "batch_size": 128, "dataset_mode": "single_sensitive",
+            "n_nonsensitive": 6, "batch_size": 128, "dataset_mode": "syn",
             "mimic_preprocessed_path": "dataset/mimic_iv_processed.csv", "mimic_train_frac": 0.6, "mimic_cal_frac": 0.2,
             "mimic_label_col": "label", "mimic_sensitive_cols": "minority,gender_m,public_insurance",
             "mimic_feature_cols": "", "mimic_id_cols": "SUBJECT_ID,HADM_ID",
@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-afcp", action="store_true", help="Run AFCP baseline")
     
     parser.add_argument("--dataset-mode", type=str, default=None,
-                        choices=["single_sensitive", "two_sensitive", "mimic", "adult", "nursery", "bach"])
+                        choices=["syn", "mimic", "adult", "nursery", "bach"])
     
     parser.add_argument("--mimic-label-col", type=str, default="label", 
                         help="Task label: 'label' (Mortality) or 'icu_delay_class' (Resource delay)")
@@ -209,19 +209,17 @@ def save_run_results(
     dataset_mode = ds_cfg.get("dataset_mode")
     base_info["dataset.dataset_mode"] = dataset_mode
     base_info["dataset.batch_size"] = ds_cfg.get("batch_size")
-    if dataset_mode in ["single_sensitive", "two_sensitive", "mimic", "adult", "nursery", "bach"]:
-        base_info["dataset.n_tra_cal"] = ds_cfg.get("n_tra_cal")
-        base_info["dataset.test_samples"] = ds_cfg.get("test_samples")
+
+    base_info["dataset.n_tra_cal"] = ds_cfg.get("n_tra_cal")
+    base_info["dataset.test_samples"] = ds_cfg.get("test_samples")
     
     if dataset_mode == "mimic":
         base_info["dataset.mimic_label"] = ds_cfg.get("mimic_label_col")
         base_info["dataset.mimic_sensitive"] = ds_cfg.get("mimic_sensitive_cols") 
         
-    if dataset_mode == "single_sensitive":
+    if dataset_mode == "syn":
         base_info["dataset.color_blue_prob"] = ds_cfg.get("color_blue_prob")
-    if dataset_mode == "two_sensitive":
-        base_info["dataset.group1_prob_1"] = ds_cfg.get("group1_prob_1")
-        base_info["dataset.group2_prob_1"] = ds_cfg.get("group2_prob_1")
+
     if dataset_mode == "bach":
         base_info["dataset.image_backbone"] = ds_cfg.get("image_backbone")
 
@@ -321,10 +319,6 @@ def build_dataset_and_loaders(data_cfg: Dict[str, Any], model_cfg: Dict[str, Any
         bach_cfg = SimpleNamespace(image_data_dir="/home/ubuntu/zmh/BrCPT/datasets/bach", batch_size=data_cfg["batch_size"], seed=seed)
         train_loader, cal_loader, test_loader, meta = build_dataloaders_bach(bach_cfg)
         return train_loader, cal_loader, test_loader, meta
-    if data_cfg["dataset_mode"] == "two_sensitive":
-        syn_cfg = SimpleNamespace(K=model_cfg["num_classes"], delta1=data_cfg["delta1"], delta0=data_cfg["delta0"], group1_prob_1=data_cfg["group1_prob_1"], group2_prob_1=data_cfg["group2_prob_1"], n_nonsensitive=data_cfg["n_nonsensitive"], n_samples=data_cfg["n_tra_cal"], test_samples=data_cfg["test_samples"], batch_size=data_cfg["batch_size"], seed=seed)
-        train_loader, cal_loader, test_loader = build_dataloaders_2(syn_cfg)
-        return train_loader, cal_loader, test_loader, syn_cfg
     else:
         syn_cfg = SimpleNamespace(K=model_cfg["num_classes"], delta1=data_cfg["delta1"], delta0=data_cfg["delta0"], group_prob_1=data_cfg["color_blue_prob"], n_nonsensitive=data_cfg["n_nonsensitive"], n_samples=data_cfg["n_tra_cal"], test_samples=data_cfg["test_samples"], batch_size=data_cfg["batch_size"], seed=seed)
         train_loader, cal_loader, test_loader = build_dataloaders_1(syn_cfg)
@@ -412,7 +406,7 @@ def run_experiment(
         )
         torch.save(backbone.state_dict(), cached_backbone_path)
 
-    # 动态选择评估路线: all / baseline / sgcp
+    #  all / baseline / sgcp
     if exp_cfg.methods in ["all", "baseline"]:
         from eval import evaluate_all_methods
         soft_cfg = SimpleNamespace(**cfg["soft_train"])
@@ -442,11 +436,6 @@ def run_experiment(
             test_loader=test_loader, exp_cfg=exp_cfg, model_cfg=model_cfg, sgcp_cfg=sgcp_cfg, device=device
         )
         metrics = metrics_dict
-
-    if cfg["dataset"]["dataset_mode"] == "mimic" and cfg["experiment"].get("methods") == "sgcp" and cfg["experiment"].get("make_intro_figure", False):
-        from figures.intro_borrowing_mimic.make_intro_borrowing_mimic_figure import make_intro_borrowing_mimic_figure
-        out_dir = os.path.join(exp_cfg.outdir, "figures_intro")
-        make_intro_borrowing_mimic_figure(backbone=backbone, assign_model=sg_assign, cal_loader=cal_loader, test_loader=test_loader, out_dir=out_dir, device=str(device), n_latent_samples=int(getattr(sgcp_cfg, "eval_latent_samples", 10)))
 
     for title, metrics0 in metrics.items():
             print(f"\n=== {title} ===")

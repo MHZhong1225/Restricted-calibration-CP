@@ -31,6 +31,7 @@ def main():
             for s in seeds_to_run:
                 run_cfg["experiment"]["seed"] = s
                 exp_cfg = SimpleNamespace(**run_cfg["experiment"])
+                exp_cfg.dataset_mode = run_cfg.get("dataset", {}).get("dataset_mode")
                 run_experiment(cfg=run_cfg, exp_cfg=exp_cfg)
 
     # Single Run
@@ -43,6 +44,7 @@ def main():
             run_cfg = clone_cfg(base_cfg)
             run_cfg["experiment"]["seed"] = s
             exp_cfg = SimpleNamespace(**run_cfg["experiment"])
+            exp_cfg.dataset_mode = run_cfg.get("dataset", {}).get("dataset_mode")
             run_experiment(cfg=run_cfg, exp_cfg=exp_cfg)
 
 if __name__ == "__main__":
