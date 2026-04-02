@@ -298,7 +298,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
     partial_color_cp = calibrate_fixed_group_cp(
         backbone,
         cal_loader,
-        key_fn=lambda d: list(d["attr1"]),  # 修正：使用 attr1
+        key_fn=lambda d: list(d["attr1"]), 
         alpha=alpha,
         device=device,
     )
@@ -311,7 +311,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
     exhaustive_cp = calibrate_fixed_group_cp(
         backbone,
         cal_loader,
-        key_fn=exhaustive_keys,  # 修正：安全的合并方式
+        key_fn=exhaustive_keys,
         alpha=alpha,
         device=device,
     )
@@ -324,7 +324,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
             backbone,
             partial_color_cp,
             test_loader,
-            key_fn=lambda d: list(d["attr1"]), # 修正：使用 attr1
+            key_fn=lambda d: list(d["attr1"]),
             dataset_name=ds_name,
             device=device,
             alpha=alpha,
@@ -333,7 +333,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
             backbone,
             exhaustive_cp,
             test_loader,
-            key_fn=exhaustive_keys, # 修正：安全的合并方式
+            key_fn=exhaustive_keys,
             dataset_name=ds_name,
             device=device,
             alpha=alpha,
@@ -399,8 +399,8 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         group_X_test = None
 
         is_tabular = (X_calib.ndim == 2)
-        
-        # 兼容地获取参数
+
+
         c_cal = cal_np.get("attr1", cal_np.get("color"))
         a_cal = cal_np.get("attr2", cal_np.get("age"))
         r_cal = cal_np.get("attr3", cal_np.get("region"))
@@ -519,7 +519,7 @@ def evaluate_sgcp(backbone, train_loader, cal_loader, test_loader, exp_cfg, mode
         sg_assign,
         sg_cp,
         test_loader,
-        dataset_name=exp_cfg.dataset_mode, # 修正：增加必要参数
+        dataset_name=exp_cfg.dataset_mode,
         device=device,
         n_latent_samples=sgcp_cfg.eval_latent_samples,
         alpha=alpha,
