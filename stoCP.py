@@ -455,15 +455,6 @@ def run_experiment(
             soft_cfg=soft_cfg,
             device=device,
         )
-        if exp_cfg.methods == "all":
-            from eval import evaluate_sgcp
-            sgcp_metrics, sg_assign, _sg_cp = evaluate_sgcp(
-                backbone=backbone, train_loader=train_loader, cal_loader=cal_loader, 
-                test_loader=test_loader, exp_cfg=exp_cfg, model_cfg=model_cfg, sgcp_cfg=sgcp_cfg, device=device
-            )
-            metrics.update(sgcp_metrics)
-        else:
-            sg_assign, _sg_cp = None, None
     else:
         from eval import evaluate_sgcp
         metrics_dict, sg_assign, _sg_cp = evaluate_sgcp(
