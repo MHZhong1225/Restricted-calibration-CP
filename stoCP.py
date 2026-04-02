@@ -331,6 +331,41 @@ def run_experiment(
     cfg: Dict[str, Dict[str, Any]],
     exp_cfg: SimpleNamespace,
 ):
+    master_csv_path = os.path.join(exp_cfg.outdir, "all_runs_summary.csv")
+    if exp_cfg.methods in ["sgcp"]:
+        if os.path.exists(master_csv_path):
+            df = pd.read_csv(master_csv_path)
+            is_run = not df[
+                (df["experiment.seed"] == exp_cfg.seed) & 
+                (df["dataset.n_tra_cal"] == cfg["dataset"]["n_tra_cal"]) & 
+                (df["model.num_prototypes"] == cfg["model"]["num_prototypes"]) & 
+                (df["sgcp_train.lr"] == cfg["sgcp_train"]["lr"]) & 
+                (df["sgcp_train.epochs"] == cfg["sgcp_train"]["epochs"]) & 
+                (df["sgcp_train.train_latent_samples"] == cfg["sgcp_train"]["train_latent_samples"]) & 
+                (df["sgcp_train.eval_latent_samples"] == cfg["sgcp_train"]["eval_latent_samples"]) & 
+                (df["sgcp_train.num_score_bins"] == cfg["sgcp_train"]["num_score_bins"]) & 
+                (df["sgcp_train.hist_smoothing"] == cfg["sgcp_train"]["hist_smoothing"]) & 
+                (df["sgcp_train.beta_kl"] == cfg["sgcp_train"]["beta_kl"]) & 
+                (df["sgcp_train.lambda_balance"] == cfg["sgcp_train"]["lambda_balance"]) & 
+                (df["sgcp_train.lambda_score"] == cfg["sgcp_train"]["lambda_score"]) & 
+                (df["dataset.dataset_mode"] == cfg["dataset"]["dataset_mode"])
+            ].empty
+            
+            if is_run:
+                print(f"skip: seed={exp_cfg.seed}, alpha={exp_cfg.alpha}, dataset={cfg['dataset']['dataset_mode']}")
+                return {"skipped": True}
+        else:
+            if os.path.exists(master_csv_path):
+                df = pd.read_csv(master_csv_path)
+                is_run = not df[
+                    (df["experiment.seed"] == exp_cfg.seed) & 
+                    (df["dataset.n_tra_cal"] == cfg["dataset"]["n_tra_cal"]) & 
+                    (df["model.num_prototypes"] == cfg["model"]["num_prototypes"]) & 
+                    (df["dataset.dataset_mode"] == cfg["dataset"]["dataset_mode"]) & 
+                    (df["experiment.method"] == exp_cfg.methods)
+                ].empty
+    # =========================
+
     model_cfg = SimpleNamespace(**cfg["model"])
     sgcp_cfg = SimpleNamespace(**cfg["sgcp_train"])
 

@@ -20,7 +20,7 @@ class Backbone(nn.Module):
         self.layer_5 = nn.Linear(64, num_classes)
 
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(p=0.2)
+        self.dropout = nn.Dropout(p=0.3)
         
         self.batchnorm1 = nn.BatchNorm1d(256)
         self.batchnorm2 = nn.BatchNorm1d(256)
