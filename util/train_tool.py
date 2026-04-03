@@ -31,7 +31,6 @@ def train_backbone(model, train_loader, epochs=150, lr=1e-3, device="cpu"):
             total_n += x.size(0)
             correct += (logits.argmax(dim=1) == y).sum().item()
         
-        # 每个 epoch 结束更新学习率
         scheduler.step()
 
         if (epoch + 1) % 10 == 0:
@@ -116,7 +115,6 @@ def train_stochastic_assignment(
     for epoch in range(epochs):
         model.train()
         
-        # 【修复点 1：初始化整个 Epoch 的累加器】
         total_loss, total_n = 0.0, 0
         total_nll, total_kl, total_bal = 0.0, 0.0, 0.0
         
@@ -152,7 +150,6 @@ def train_stochastic_assignment(
             torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
             opt.step()
 
-            # 【修复点 2：按 batch_size 加权累加各项子 Loss】
             bs = len(y_batch)
             total_loss += loss.item() * bs
             total_nll += score_nll.item() * bs
@@ -164,7 +161,6 @@ def train_stochastic_assignment(
         momentum = 0.9 if epoch > 0 else 0.0  
         p_gb = momentum * p_gb + (1.0 - momentum) * new_p_gb
 
-        # 【修复点 3：每个 Epoch 都向 wandb 报告平均 Loss，让曲线连续且平滑】
         import wandb
         if wandb.run is not None:
             wandb.log({
