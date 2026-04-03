@@ -1,7 +1,6 @@
 
 import torch
 import numpy as np
-import pandas as pd
 import os
 
 from typing import Any, Dict, List, Optional
@@ -9,73 +8,7 @@ import copy
 import itertools
 import json
 
-from types import SimpleNamespace
-from dataset.synthetic import build_dataloaders_1, build_dataloaders_2
-from dataset.mimic import build_dataloaders_mimic
-from dataset.adult import build_dataloaders_adult
-from dataset.nursery import build_dataloaders_nursery
-from typing import Dict, Any, Tuple
 
-
-def build_dataset_and_loaders(
-    data_cfg: Dict[str, Any],
-    model_cfg: Dict[str, Any],
-    seed: int,
-) -> Tuple[Any, Any, Any, str, Any]:
-    d_cfg = SimpleNamespace(**data_cfg)
-    d_cfg.seed = seed
-
-    if d_cfg.dataset_mode == "mimic":
-        tr_loader, ca_loader, te_loader, meta = build_dataloaders_mimic(d_cfg)
-        model_cfg["feature_dim"] = meta.feature_dim
-        return tr_loader, ca_loader, te_loader, "mimic", meta
-    elif d_cfg.dataset_mode == "adult":
-        tr_loader, ca_loader, te_loader, meta = build_dataloaders_adult(d_cfg)
-        model_cfg["feature_dim"] = meta.feature_dim
-        return tr_loader, ca_loader, te_loader, "adult", meta
-    elif d_cfg.dataset_mode == "nursery":
-        tr_loader, ca_loader, te_loader, meta = build_dataloaders_nursery(d_cfg)
-        model_cfg["feature_dim"] = meta.feature_dim
-        return tr_loader, ca_loader, te_loader, "nursery", meta
-    elif d_cfg.dataset_mode == "bach":
-        from dataset.image_data import build_dataloaders_bach
-        tr_loader, ca_loader, te_loader, meta = build_dataloaders_bach(d_cfg)
-        return tr_loader, ca_loader, te_loader, "bach", meta
-    elif d_cfg.dataset_mode == "two_sensitive":
-        k = int(model_cfg.get("num_classes", 6))
-        syn_cfg = SimpleNamespace(
-            K=k,
-            delta1=d_cfg.delta1,
-            delta0=d_cfg.delta0,
-            group1_prob_1=d_cfg.group1_prob_1,
-            group2_prob_1=d_cfg.group2_prob_1,
-            n_nonsensitive=d_cfg.n_nonsensitive,
-            n_samples=d_cfg.n_tra_cal,
-            test_samples=d_cfg.test_samples,
-            batch_size=d_cfg.batch_size,
-            seed=seed,
-        )
-        tr_loader, ca_loader, te_loader = build_dataloaders_2(syn_cfg)
-        model_cfg["feature_dim"] = next(iter(tr_loader))[0].shape[1]
-        return tr_loader, ca_loader, te_loader, "two_sensitive", syn_cfg
-    elif d_cfg.dataset_mode == "single_sensitive":
-        k = int(model_cfg.get("num_classes", 6))
-        syn_cfg = SimpleNamespace(
-            K=k,
-            delta1=d_cfg.delta1,
-            delta0=d_cfg.delta0,
-            group_prob_1=d_cfg.color_blue_prob,
-            n_nonsensitive=d_cfg.n_nonsensitive,
-            n_samples=d_cfg.n_tra_cal,
-            test_samples=d_cfg.test_samples,
-            batch_size=d_cfg.batch_size,
-            seed=seed,
-        )
-        tr_loader, ca_loader, te_loader = build_dataloaders_1(syn_cfg)
-        model_cfg["feature_dim"] = next(iter(tr_loader))[0].shape[1]
-        return tr_loader, ca_loader, te_loader, "single_sensitive", syn_cfg
-    else:
-        raise ValueError(f"Unknown dataset_mode: {d_cfg.dataset_mode}")
 
 def pop_seed_sweep_from_grid(grid: Dict[str, List[Any]]):
     for k in ("seeds", "seed", "experiment.seed"):
@@ -107,11 +40,6 @@ def resolve_seed_list(
 def clone_cfg(cfg: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return copy.deepcopy(cfg)
 
-
-
-# =========================
-# Sweep helpers
-# =========================
 
 def load_grid_json(grid_json_path: Optional[str]) -> Dict[str, List[Any]]:
     if grid_json_path is None:
@@ -174,46 +102,6 @@ CONFIG_PREFIXES = (
     "proto_train.",
     "sgcp_train.",
 )
-
-def aggregate_summary_from_df(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aggregate across seeds:
-      - group by all config columns except experiment.seed
-      - compute mean/std/count for numeric metric columns
-    """
-    if df.empty:
-        return df.copy()
-
-    metric_cols = [c for c in df.columns if c.startswith("metric.")]
-    numeric_metric_cols = [c for c in metric_cols if pd.api.types.is_numeric_dtype(df[c])]
-
-    if not numeric_metric_cols:
-        return df.copy()
-
-    group_cols = [
-        c
-        for c in df.columns
-        if (
-            c == "method"
-            or c == "dataset_name"
-            or (c.startswith(CONFIG_PREFIXES) and c != "experiment.seed")
-        )
-    ]
-
-    grouped = df.groupby(group_cols, dropna=False)[numeric_metric_cols]
-    mean_df = grouped.mean().reset_index()
-    std_df = grouped.std(ddof=1).reset_index()
-    count_df = grouped.size().reset_index(name="seed_count")
-
-    out = mean_df.copy()
-    rename_mean = {c: f"{c}.mean" for c in numeric_metric_cols}
-    out = out.rename(columns=rename_mean)
-
-    std_df = std_df.rename(columns={c: f"{c}.std" for c in numeric_metric_cols})
-    out = out.merge(std_df, on=group_cols, how="left")
-    out = out.merge(count_df, on=group_cols, how="left")
-
-    return out
 
 
 def print_configs(**configs):

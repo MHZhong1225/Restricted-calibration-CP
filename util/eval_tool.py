@@ -355,7 +355,6 @@ def evaluate_prediction_sets(
     for attr_name, attr_vals in attrs.items():
         if attr_vals is None:
             continue
-
         covs, szs = _group_stats(attr_vals, cover, sizes)
         out[f"{attr_name}_coverages"] = covs
         out[f"{attr_name}_set_sizes"] = szs

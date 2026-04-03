@@ -86,7 +86,6 @@ def prediction_sets_to_metrics(test_np, C_sets, alpha):
     attr7_cov = grp(cover, attr7) if attr7 is not None else {}
     attr7_size = grp(size, attr7) if attr7 is not None else {}
 
-    # 防御性判断：部分数据集没有 attr2 / attr3 (如 BACH)
     if attr1 is not None and attr2 is not None and attr3 is not None:
         joint_keys = np.asarray([f"{int(c)}|{int(a)}|{int(r)}" for c, a, r in zip(attr1, attr2, attr3)], dtype=object)
     else:
@@ -384,7 +383,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         alpha=alpha,
     )
 
-    if getattr(exp_cfg, "run_afcp_adaptive", False):
+    if getattr(exp_cfg, "run_afcp", False):
         cal_np = loader_to_numpy(cal_loader)
         test_np = loader_to_numpy(test_loader)
         X_calib = cal_np["x"].astype(np.float32)
