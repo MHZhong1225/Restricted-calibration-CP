@@ -314,7 +314,7 @@ def evaluate_all_methods(backbone, train_loader, cal_loader, test_loader, exp_cf
         alpha=alpha,
         device=device,
     )
-
+    results = {}
     results = {
         "Marginal CP": evaluate_global_cp(
             backbone, marginal_cp, test_loader, dataset_name=ds_name, device=device, alpha=alpha
