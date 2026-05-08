@@ -1,0 +1,18 @@
+{
+  "dataset.dataset_mode": ["mimic"],
+  "dataset.batch_size": [128],
+  "dataset.n_tra_cal": [0],
+  "dataset.train_frac": [0.5],
+  "model.num_prototypes": [3],
+  "model.temperature": [1.0],
+  "model.latent_dim": [8],
+  "backbone_train.epochs": [40],
+  "backbone_train.lr": [0.00003],
+  "sgcp_train.epochs": [160],
+  "sgcp_train.train_latent_samples": [3],
+  "sgcp_train.eval_latent_samples": [8],
+  "sgcp_train.lr": [0.001],
+  "sgcp_train.lambda_nll": [0.001],
+  "sgcp_train.lambda_balance": [0.5],
+  "sgcp_train.lambda_rank": [1]
+}

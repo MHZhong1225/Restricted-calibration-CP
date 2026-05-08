@@ -1,0 +1,22 @@
+{
+  "dataset.dataset_mode": ["bach"],
+  "dataset.batch_size": [32],
+  "dataset.image_backbone": ["resnet50"],
+  "dataset.n_tra_cal": [0],
+  "dataset.train_frac": [0.5],
+  "dataset.test_samples": [100],
+  "model.num_classes": [4],
+  "model.num_prototypes": [6],
+  "model.temperature": [1.0],
+  "model.latent_dim": [64],
+  "backbone_train.epochs": [100],
+  "backbone_train.lr": [0.001],
+  "sgcp_train.epochs": [150],
+  "sgcp_train.train_latent_samples": [8],
+  "sgcp_train.eval_latent_samples": [8],
+  "sgcp_train.lr": [0.001],
+  "sgcp_train.lambda_nll": [0.5],
+  "sgcp_train.lambda_balance": [0.1],
+  "sgcp_train.lambda_rank": [1],
+  "seeds": [77]
+}

@@ -1,0 +1,19 @@
+{
+  "dataset.dataset_mode": ["syn"],
+  "dataset.n_tra_cal": [4000],
+  "dataset.batch_size": [32],
+  "dataset.train_frac": [0.5],
+  "model.num_prototypes": [3],
+  "model.num_classes": [6],
+  "backbone_train.lr": [0.0003],
+  "model.latent_dim": [16],
+  "model.temperature": [1.0],
+  "sgcp_train.epochs": [160],
+  "sgcp_train.train_latent_samples": [3],
+  "sgcp_train.eval_latent_samples": [8],
+  "sgcp_train.lr": [0.001],
+  "sgcp_train.lambda_nll": [0.5],
+  "sgcp_train.lambda_balance": [0.1],
+  "sgcp_train.lambda_rank": [1],
+  "seeds": [77]
+}
