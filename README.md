@@ -1,5 +1,7 @@
 # SGCP
 
+[Project page](https://mhzhong1225.github.io/Restricted-calibration-CP/) · [Paper](docs/assets/sgcp-paper.pdf)
+
 This repository contains a minimal, runnable implementation of SGCP. The release
 keeps only the proposed method and the code needed to run it on the supported
 `syn`, `mimic`, `nursery`, and `bach` datasets.
